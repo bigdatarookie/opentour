@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 from backend.adapters import EspoCRM, Failure, JsonGET, NativeWork
@@ -231,6 +232,38 @@ class PublicPathTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_espo_search_wire_contract_does_not_silently_drop_filters(self):
+        # Mirrors the installed SearchParamsFetcher boundary: a plain string
+        # `where` query is ignored; searchParams JSON keeps typed arrays/ints.
+        class EspoBoundary(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                search = json.loads(query['searchParams'][0]) if 'searchParams' in query else {}
+                where = search.get('where') if isinstance(search.get('where'), list) else []
+                matched = not where
+                data = {'list': [{'id': 'synthetic1', 'name': 'Synthetic'}] if matched else [],
+                        'total': int(matched)}
+                raw = json.dumps(data).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), EspoBoundary)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            crm = EspoCRM()
+            crm._client = lambda: JsonGET('http://127.0.0.1:' + str(server.server_port))
+            result = crm.list('Contact', offset=0, limit=2, query='unmatched-synthetic-term', has_email=None, has_phone=None)
+            self.assertEqual(result, {'list': [], 'total': 0})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_http_adapter_rejects_remote_urls_and_redirects(self):
         for url in ('https://example.invalid', 'http://localhost:7433', 'http://127.0.0.1:7433?token=secret'):
             with self.assertRaises(Failure):
@@ -247,10 +280,13 @@ class AdapterTests(unittest.TestCase):
         crm.list('Contact', offset=2, limit=7, query='Synthetic', has_email=True, has_phone=None)
         path, params = seen[0]
         self.assertEqual(path, '/Contact')
-        self.assertEqual(params['offset'], 2)
-        self.assertEqual(params['maxSize'], 7)
-        self.assertNotIn('password', params['select'])
-        self.assertIn({'type': 'isNotNull', 'attribute': 'emailAddress'}, json.loads(params['where']))
+        search = json.loads(params['searchParams'])
+        self.assertEqual(search['offset'], 2)
+        self.assertEqual(search['maxSize'], 7)
+        self.assertNotIn('password', search['select'])
+        self.assertIsInstance(search['select'], list)
+        self.assertEqual(search['order'], 'ASC')
+        self.assertIn({'type': 'isNotNull', 'attribute': 'emailAddress'}, search['where'])
 
     def test_native_adapter_explicit_scope_and_cross_project_detail_refusal(self):
         with tempfile.TemporaryDirectory() as temp:

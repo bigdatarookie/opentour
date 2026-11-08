@@ -90,11 +90,14 @@ def main():
             status, page, _ = get('/api/clients?limit=1&offset=0')
             results['crm_combined_list_http'] = status
             assert status == 200 and page['total'] == people['total'] + orgs['total']
-            results['crm_filter_http'] = get('/api/clients?kind=person&hasEmail=true&limit=2')[0]
+            status, filtered, _ = get('/api/clients?kind=person&hasEmail=true&limit=2')
+            results['crm_filter_http'] = status
             assert results['crm_filter_http'] == 200
+            assert filtered['total'] <= people['total'] and all(item.get('email') for item in filtered['items'])
             # Deliberately synthetic search criterion; no real name/channel enters a URL or output.
-            results['crm_search_http'] = get('/api/clients?q=opentour-synthetic-unmatched-probe-4fba&limit=2')[0]
-            assert results['crm_search_http'] == 200
+            status, searched, _ = get('/api/clients?q=opentour-synthetic-unmatched-probe-4fba&limit=2')
+            results['crm_search_http'] = status
+            assert status == 200 and searched['total'] == 0 and searched['items'] == []
         else:
             status, error, _ = get('/api/clients')
             assert status == 503 and error['error'] == 'crm_read_credential_not_configured'

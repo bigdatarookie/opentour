@@ -90,9 +90,13 @@ class EspoCRM:
             if flag is not None:
                 where.append({'type': 'isNotNull' if flag else 'isNull', 'attribute': field})
         select = CRM_FIELDS if entity == 'Contact' else 'id,name,type,emailAddress,phoneNumber,modifiedAt,createdAt'
-        result = self._client().get('/' + entity, {
+        search = {
             'offset': offset, 'maxSize': limit, 'select': select,
-            'orderBy': 'id', 'order': 'asc', 'where': json.dumps(where)})
+            'orderBy': 'id', 'order': 'ASC', 'where': where}
+        # Espo's multi-param parser discards a string `where`. The JSON search
+        # envelope requires typed select arrays and numeric paging values.
+        search['select'] = select.split(',')
+        result = self._client().get('/' + entity, {'searchParams': json.dumps(search)})
         if not isinstance(result, dict) or not isinstance(result.get('list'), list) or type(result.get('total')) is not int or result['total'] < 0:
             raise Failure('crm_list_contract_invalid')
         if len(result['list']) != min(limit, max(0, result['total'] - offset)):
