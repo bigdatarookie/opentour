@@ -36,7 +36,11 @@ def fields(body, allowed):
 
 class BoardStore:
     def __init__(self, path):
-        path = Path(path).expanduser().absolute()
+        requested = Path(path).expanduser().absolute()
+        # Pin the resolved parent for validation, creation and every later connection.
+        # Leave the final component unresolved so O_NOFOLLOW still refuses a file symlink.
+        path = requested.parent.resolve() / requested.name
+        destination = path.resolve()
         repo = Path(__file__).resolve().parents[1]
         # Also reject the common checkout when this module runs from a worktree.
         roots = [repo.resolve()]
@@ -50,7 +54,8 @@ class BoardStore:
                 common_file = git_dir / 'commondir'
                 if common_file.is_file():
                     roots.append((git_dir / common_file.read_text().strip()).resolve().parent)
-        if any(path.resolve().is_relative_to(root) for root in roots) or '.artifacts' in path.parts:
+        if (any(destination.is_relative_to(root) for root in roots)
+                or '.artifacts' in requested.parts or '.artifacts' in destination.parts):
             raise Failure('board_database_must_be_private_app_data', 503)
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         parent = path.parent.stat()

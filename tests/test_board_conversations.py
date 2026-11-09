@@ -113,6 +113,41 @@ class StoreTests(unittest.TestCase):
         self.code('board_database_not_private', lambda: BoardStore(self.path))
         self.code('board_database_must_be_private_app_data', lambda: BoardStore(Path(__file__).resolve().parents[1] / 'synthetic.sqlite3'))
 
+    def test_symlinked_artifacts_parent_is_refused_without_creating_target_data(self):
+        # Entirely synthetic: never references the owner's artifacts directory.
+        root = Path(self.tmp.name)
+        protected = root / 'synthetic-source' / '.artifacts'
+        protected.mkdir(parents=True, mode=0o700)
+        alias = root / 'aliased-app-data'
+        alias.symlink_to(protected, target_is_directory=True)
+        self.code('board_database_must_be_private_app_data',
+                  lambda: BoardStore(alias / 'new-private-directory' / 'board.sqlite3'))
+        self.assertEqual(list(protected.iterdir()), [])
+
+    def test_validated_canonical_parent_is_used_after_alias_changes(self):
+        root = Path(self.tmp.name)
+        safe = root / 'canonical-private'
+        safe.mkdir(mode=0o700)
+        protected = root / 'synthetic-source' / '.artifacts'
+        protected.mkdir(parents=True, mode=0o700)
+        alias = root / 'aliased-app-data'
+        alias.symlink_to(safe, target_is_directory=True)
+        store = BoardStore(alias / 'board.sqlite3')
+        self.assertEqual(store.path, safe.resolve() / 'board.sqlite3')
+        alias.unlink()
+        alias.symlink_to(protected, target_is_directory=True)
+        task = store.create(ADMIN, {'requestId': 'canonical-create-0001', 'title': 'Synthetic task',
+                   'description': 'Synthetic only', 'section': 'tasks'})
+        self.assertEqual(store.detail(USER, task['id'])['title'], 'Synthetic task')
+        self.assertEqual(list(protected.iterdir()), [])
+        # Canonicalizing the parent must not remove the final-component no-follow protection.
+        final_alias = safe / 'alias.sqlite3'
+        final_alias.symlink_to(store.path)
+        before = store.path.read_bytes()
+        with self.assertRaises(OSError):
+            BoardStore(final_alias)
+        self.assertEqual(store.path.read_bytes(), before)
+
     def test_concurrent_duplicate_submission(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             ids = list(pool.map(lambda _: self.create()['id'], range(8)))
