@@ -8,6 +8,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Product branch or pull request ref being tested
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact full commit SHA that must be checked out
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,6 +30,29 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+
+      - name: Verify candidate revision
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref || github.ref }}
+          EXPECTED_SHA: ${{ inputs.candidate_sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: sh
+        run: |
+          actual_sha=$(git rev-parse HEAD)
+          {
+            echo '## Candidate source identity'
+            echo
+            echo "- Event: ${EVENT_NAME}"
+            echo "- Candidate ref: ${CANDIDATE_REF}"
+            echo "- Expected SHA: ${EXPECTED_SHA}"
+            echo "- Checked-out SHA: ${actual_sha}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            echo "Checked-out SHA ${actual_sha} does not match expected SHA ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
 
       - name: Record runtime
         shell: sh
