@@ -335,7 +335,11 @@ function nativeObservationPanel(item) {
   modal.observationRefresh=refresh;queueMicrotask(() => {if (panel.isConnected && state.modal === modal) refresh();});
   return panel;
 }
-function renderDetailError(text) {$('detail-body').replaceChildren(stateBox('Не удалось открыть',text,() => loadDetail(),'↻'));}
+function renderDetailError(text) {
+  const box=stateBox('Не удалось открыть',text,() => loadDetail(),'↻');
+  if (state.modal?.returnClient) {const back=button('Вернуться к клиенту',returnToClient);back.dataset.returnClient='true';box.append(back);}
+  $('detail-body').replaceChildren(box);
+}
 function renderDetail(kind,item) {
   const scroll=$('detail-body').scrollTop;
   const focused=document.activeElement;
@@ -360,7 +364,15 @@ function renderDetail(kind,item) {
     main.append(detailSection('Контакты',[item.email ? `Email: ${item.email}` : 'Email не указан',item.phone ? `Телефон: ${item.phone}` : 'Телефон не указан'].join('\n')));
     if (item.surname?.technicalValue) main.append(node('p','technical-note','Фамилия не подтверждена. Техническое значение CRM не является сведением о клиенте.'));
     if (item.attributes?.crmType) main.append(detailSection('Категория CRM',item.attributes.crmType));
-    main.append(detailSection('Связанные работы','Связи с работами для этой записи пока не подключены.'));
+    const related=node('section','detail-section related-tasks');related.append(node('h3','','Связанные работы'));
+    if (item.relatedWork?.status === 'available') {
+      for (const task of item.relatedWork.items) {
+        const link=button(task.title,() => openClientTask(task.id),'secondary-button');link.dataset.relatedTask=task.id;related.append(link);
+      }
+      if (!item.relatedWork.items.length) related.append(node('p','','Доступных связанных работ нет.'));
+      if (!item.relatedWork.complete) related.append(node('p','','Показана часть доступных работ.'));
+    } else related.append(node('p','','Связанные работы недоступны для этого доступа или подключения.'));
+    main.append(related);
     side.append(metadata([['Тип',item.kind === 'organization' ? 'Организация' : 'Физическое лицо'],['Источник','CRM'],['Изменено',item.modifiedAt || 'Не указано']]));
     try {
       const url=new URL(item.sourceLink);
@@ -375,6 +387,12 @@ function renderDetail(kind,item) {
     side.append(node('div','detail-note','Изменение записей выполняется в CRM. Эта страница ничего не сохраняет и не дополняет автоматически.'));
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
+  if (kind === 'client' && state.modal?.restoreClient) {
+    const restore=state.modal.restoreClient;delete state.modal.restoreClient;
+    $('detail-body').scrollTop=restore.scroll;
+    const target=[...$('detail-body').querySelectorAll('[data-related-task]')].find(el => el.dataset.relatedTask === restore.taskId);
+    (target || $('close-detail')).focus({preventScroll:true});
+  }
   if (kind === 'work' && observationFocus) $('detail-body').querySelector(observationFocus)?.focus({preventScroll:true});
 }
 function renderCampaignDetail(item) {
@@ -410,6 +428,22 @@ function renderCampaignDetail(item) {
   }
   caveats.append(materials);root.append(caveats);$('detail-body').replaceChildren(root);
 }
+function openClientTask(taskId) {
+  if (state.modal?.kind !== 'client') return;
+  const client={id:state.modal.id,scroll:$('detail-body').scrollTop,taskId};
+  state.modal={kind:'app',id:taskId,version:null,returnClient:client,clientNavigationFocus:true};
+  $('detail-title').textContent='Подробности';$('detail-body').replaceChildren(node('p','','Загружаем обсуждение…'));
+  loadDetail();
+}
+function returnToClient() {
+  const client=state.modal?.returnClient;
+  if (!client) return;
+  state.modal={kind:'client',id:client.id,version:null,restoreClient:client};
+  $('detail-mode').textContent='Режим просмотра';
+  $('detail-title').textContent='Подробности';$('detail-body').replaceChildren(node('p','','Загружаем клиента…'));
+  loadDetail();
+}
+
 function openDetails(kind,id,trigger) {
   state.modal={kind,id,version:null};state.trigger=trigger;
   $('detail-mode').textContent='Режим просмотра';
@@ -466,6 +500,7 @@ function renderAppTask(item) {
   $('detail-mode').textContent=state.boardAccess?.respond ? 'Ответ сохраняется в OpenTour' : 'Режим просмотра';
   $('detail-title').textContent=item.title;$('detail-eyebrow').textContent='ОБСУЖДЕНИЕ ЗАДАЧИ · OPENTOUR';
   const root=node('div','app-task-detail');
+  if (state.modal?.returnClient) {const back=button('Вернуться к клиенту',returnToClient);back.dataset.returnClient='true';root.append(back);}
   root.append(detailSection('Задача',item.description),node('p','detail-note','Ответ сохраняется в OpenTour. Доставка контекста не подтверждает работу агента и не разрешает бизнес-действие.'));
   const history=node('section','app-history');history.setAttribute('aria-label','Обсуждение задачи');
   for (const message of item.messages) {
@@ -516,4 +551,5 @@ function renderAppTask(item) {
     form.append(label,target,input,node('p','field-hint','Не вводите пароли и ключи доступа. Закрытие окна сохраняет черновик в этой вкладке.'),submit,status);root.append(form);
   }
   $('detail-body').replaceChildren(root);$('detail-body').scrollTop=scroll;
+  if (state.modal?.clientNavigationFocus) {delete state.modal.clientNavigationFocus;root.querySelector('[data-return-client]')?.focus({preventScroll:true});}
 }

@@ -115,7 +115,8 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                         if len(raw) != int(raw_length):
                             raise Failure('incomplete_body', 400)
                         body = json.loads(raw)
-                        data = board_store.append(principal, parts[0], body) if parts else board_store.create(principal, body)
+                        data = board_store.append(principal, parts[0], body) if parts else board_store.create(
+                            principal, body, validate_client=lambda ref: service.client('crm:' + ref['entity'] + ':' + ref['externalId']))
                         return self.respond(200, data)
                     else:
                         raise Failure('board_route_forbidden', 403)
@@ -135,6 +136,11 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                     data = service.clients(params)
                 elif path.startswith('/api/clients/') and not params:
                     data = service.client(path[len('/api/clients/'):])
+                    if board_store:
+                        ref = {'entity': data['provenance']['entity'], 'externalId': data['provenance']['externalId']}
+                        data['relatedWork'] = board_store.related(principal, ref) if principal.board_read else {
+                            'items': [], 'status': 'board_access_not_granted', 'complete': False}
+                        data['version'] = version({k: v for k, v in data.items() if k != 'version'})
                 elif path == '/api/campaigns' and not params:
                     data = campaign.list()
                 elif path == '/api/campaigns/' + CAMPAIGN_ID and not params:

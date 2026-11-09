@@ -10,7 +10,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from .adapters import Failure
-from .core import PROJECT, now, version
+from .core import ID, PROJECT, now, version
 
 DESTINATIONS = {'tasks': 'operator-agent@kernel', 'clients': 'campaign-creative@opentour-rig',
                 'campaigns': 'campaign-operator@opentour-rig'}
@@ -32,6 +32,16 @@ def key(value):
 def fields(body, allowed):
     if not isinstance(body, dict) or set(body) - set(allowed):
         raise Failure('invalid_board_fields', 400)
+
+
+def client_reference(value):
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {'entity', 'externalId'}
+            or value.get('entity') not in ('Contact', 'Account')
+            or not isinstance(value.get('externalId'), str) or not ID.fullmatch(value['externalId'])):
+        raise Failure('invalid_client_reference', 400)
+    return {'entity': value['entity'], 'externalId': value['externalId']}
 
 
 class BoardStore:
@@ -71,12 +81,15 @@ class BoardStore:
         self.path = path
         with self.db() as db:
             schema = db.execute('PRAGMA user_version').fetchone()[0]
-            if schema not in (0, 1):
+            if schema not in (0, 1, 2):
                 raise Failure('board_schema_unsupported', 503)
             if schema == 0:
                 for sql in SCHEMA:
                     db.execute(sql)
-                db.execute('PRAGMA user_version=1')
+            if schema < 2:
+                for sql in CLIENT_SCHEMA:
+                    db.execute(sql)
+                db.execute('PRAGMA user_version=2')
 
     @contextmanager
     def db(self):
@@ -123,21 +136,32 @@ class BoardStore:
         db.execute('INSERT INTO requests VALUES(?,?,?,?,?)',
                    (principal.subject, operation, request_id, version(payload), result_id))
 
-    def create(self, principal, body):
+    def create(self, principal, body, validate_client=None):
         self.permit(principal, create=True)
-        fields(body, ('requestId', 'title', 'description', 'section', 'requestText'))
+        fields(body, ('requestId', 'title', 'description', 'section', 'requestText', 'clientRef'))
         payload = {'title': text(body.get('title'), 240), 'description': text(body.get('description'), 4000),
                    'section': body.get('section')}
         if not isinstance(payload['section'], str) or payload['section'] not in DESTINATIONS:
             raise Failure('board_section_forbidden', 400)
         question = text(body['requestText'], 4000) if 'requestText' in body else None
         payload['requestText'] = question
+        reference = client_reference(body.get('clientRef'))
+        if reference is not None:
+            payload['clientRef'] = reference  # Absent refs retain v1 request digest/replay semantics.
+            if validate_client:
+                with self.db() as db:
+                    existing = self.replay(db, principal, 'create', body.get('requestId'), payload)
+                if existing:
+                    return self.detail(principal, existing)
+                validate_client(reference)  # Fixed CRM detail read, outside the DB transaction.
         with self.db() as db:
             task_id = self.replay(db, principal, 'create', body.get('requestId'), payload)
             if not task_id:
                 task_id = 'task_' + uuid.uuid4().hex
                 db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',
                            (task_id, PROJECT, payload['title'], payload['description'], payload['section'], principal.subject, now()))
+                if reference is not None:
+                    db.execute('INSERT INTO task_clients VALUES(?,?,?)', (task_id, reference['entity'], reference['externalId']))
                 self.remember(db, principal, 'create', body['requestId'], payload, task_id)
                 self.insert_message(db, task_id, principal, 'request' if question else 'comment', question or payload['description'], None)
         return self.detail(principal, task_id)
@@ -151,6 +175,9 @@ class BoardStore:
         context = {'project': PROJECT, 'taskId': task_id, 'messageId': message_id, 'replyTo': reply_to,
                    'title': task['title'], 'kind': kind, 'text': content, 'requestText': parent['body'] if parent else None,
                    'notice': 'OpenTour saved conversation context. Not a native human decision or permission for business action.'}
+        reference = self.client_ref(db, task_id)
+        if reference is not None:
+            context['clientRef'] = reference
         # The body is deterministic and persisted before delivery; no mutable task reread on retry.
         raw = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         outbox_id = 'context_' + hashlib.sha256((PROJECT + ':' + message_id).encode()).hexdigest()
@@ -197,10 +224,30 @@ class BoardStore:
         with self.db() as db:
             task = dict(self.task(db, principal, task_id))
             rows = db.execute(MESSAGE_SELECT + ' WHERE m.task_id=? ORDER BY m.seq DESC LIMIT 101', (task_id,)).fetchall()
+            task['clientRef'] = self.client_ref(db, task_id)
             task['messages'] = [self.project_message(r) for r in reversed(rows[:100])]
             task['historyComplete'] = len(rows) <= 100
             task['version'] = version(task)
             return task
+
+    def client_ref(self, db, task_id):
+        row = db.execute('SELECT entity,external_id FROM task_clients WHERE task_id=?', (task_id,)).fetchone()
+        return {'entity': row['entity'], 'externalId': row['external_id']} if row else None
+
+    def related(self, principal, reference):
+        self.permit(principal)
+        reference = client_reference(reference)
+        if reference is None:
+            raise Failure('invalid_client_reference', 400)
+        with self.db() as db:
+            params = [PROJECT, reference['entity'], reference['externalId']]
+            sql = """SELECT t.id,t.title FROM tasks t JOIN task_clients c ON c.task_id=t.id
+                     WHERE t.project=? AND c.entity=? AND c.external_id=?"""
+            if '*' not in principal.board_tasks:
+                sql += ' AND t.id IN (' + ','.join('?' for _ in principal.board_tasks) + ')'
+                params.extend(principal.board_tasks)
+            rows = db.execute(sql + ' ORDER BY t.created_at DESC,t.id LIMIT 101', params).fetchall()
+            return {'items': [dict(r) for r in rows[:100]], 'status': 'available', 'complete': len(rows) <= 100}
 
     def list(self, principal):
         self.permit(principal)
@@ -230,3 +277,9 @@ state TEXT NOT NULL CHECK(state IN ('pending','delivered','failed','unknown')),e
 processing TEXT NOT NULL DEFAULT 'unconfirmed',updated_at TEXT NOT NULL)''',
 'CREATE INDEX messages_task_sequence ON messages(task_id,seq)',
 'CREATE INDEX outbox_state ON outbox(state,updated_at)']
+
+
+CLIENT_SCHEMA = [
+"""CREATE TABLE task_clients(task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+entity TEXT NOT NULL CHECK(entity IN ('Contact','Account')),external_id TEXT NOT NULL)""",
+'CREATE INDEX task_clients_reference ON task_clients(entity,external_id,task_id)']

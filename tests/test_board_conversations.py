@@ -107,7 +107,7 @@ class StoreTests(unittest.TestCase):
         with self.store.db() as db:
             self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0], 1)
             self.assertEqual(db.execute('PRAGMA busy_timeout').fetchone()[0], 5000)
-            db.execute('PRAGMA user_version=2')
+            db.execute('PRAGMA user_version=3')
         self.code('board_schema_unsupported', lambda: BoardStore(self.path))
         os.chmod(self.path, 0o644)
         self.code('board_database_not_private', lambda: BoardStore(self.path))
