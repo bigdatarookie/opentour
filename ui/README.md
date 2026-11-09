@@ -77,3 +77,18 @@ python3 tools/ui_browser_probe.py --native-observations --native-work-root /abso
 ```
 
 Builder evidence: 19 targeted synthetic browser checks, 19 existing synthetic task/client checks, and 8 native-only live browser checks passed. Backend/native/campaign tests passed (21/10/8). Visible matching audit/reply cases are synthetic; real positive human decision/reply/resume and full slice acceptance remain unproven. Independent Code QA then scoped System QA must review the same candidate before integration. Detailed evidence: proof/native-observations/RESULTS.md.
+
+
+## Populated Organization detail proof
+
+Account list/detail projection and Organization rendering already existed. The focused probe now verifies the populated Organization path through the existing authenticated backend HTTP and UI, using one in-memory synthetic Account and no live CRM/native source:
+
+```sh
+python3 tools/ui_browser_probe.py --organization-detail
+```
+
+This mode refuses live/credential/native-source flags and screenshot output. It checks Account identity/version/category, authorization/project boundaries, Organization fields and Account deep link (without navigating it), source error/retry, unknown values, untrusted text, focus, mobile scrolling/Close and cleanup. The network observation permits only its own loopback backend. Existing task-owned browser/profile/grant/server lifecycle is reused.
+
+A long organization name reproduced a clipped mobile footer: the Close button extended below the dialog at 390×844. The existing flex dialog layout now also covers client detail grids, keeping the footer visible and body scrollable. Task/campaign flex behavior stays as before. The focused 19 checks and the 19 existing synthetic task/client browser checks pass. Backend/data projection/authorization and campaign/native routes were not changed, so their accepted evidence is retained rather than repeated. See proof/organization-detail/RESULTS.md.
+
+This is a populated synthetic internal HTTP/UI contract proof. It does not prove populated owner Account data or a real upstream Espo Account read in the current installation; no private CRM reference or record was accessed. No manager identity, write, conversation, campaign or deployment is enabled.
