@@ -94,7 +94,10 @@ def observe(native, slice_name, original_id):
                 'qitemId', 'tags', 'state', 'sourceSession', 'destinationSession', 'blockedOn', 'tsUpdated')):
             raise Failure('native_observation_changed', 503)
     return {'project': native.project, 'mission': native.mission, 'slice': slice_name,
-            'originalTaskId': original_id, 'source': 'native_read_observation',
+            'originalTaskId': original_id, 'originalState': original.get('state') if original.get('state') in STATES else None,
+            'currentAsk': next(({'taskId': row['qitemId'], 'state': row.get('state') if row.get('state') in STATES else None}
+                                for row, verb in targets if verb == 'answer'), None),
+            'source': 'native_read_observation',
             'status': 'observed' if observations or replies else 'unconfirmed', 'observations': observations,
             'linkedReplies': replies, 'replyWindowComplete': reply_complete,
             'queueWindowComplete': complete, 'auditWindowComplete': audit_complete,

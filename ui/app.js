@@ -154,6 +154,7 @@ async function loadBoard(quiet=false) {
     const result=await api('/api/board',{etag:state.etag});
     if (session !== state.session) return;
     $('board-notice').hidden=true; $('board-updated').textContent='Обновлено в '+timeLabel();
+    let reloadingDetail=false;
     if (!result.unchanged) {
       const previous=state.board;
       const data=result.data;
@@ -164,12 +165,13 @@ async function loadBoard(quiet=false) {
         if (state.modal?.kind === 'work') {
           const changed=data.items.find(item => item.id === state.modal.id);
           if (!changed) renderDetailError('Задача больше не доступна в текущем проекте.');
-          else if (changed.version !== state.modal.version) loadDetail();
+          else if (changed.version !== state.modal.version) {reloadingDetail=true;loadDetail();}
         }
         if (!quiet) announce('Доска обновлена. '+data.items.length+' задач.');
       }
       if (data.queueWindowComplete === false) showNotice('board-notice','Показана часть нативной истории. Завершение работ по ней не подтверждается.');
     }
+    if (!reloadingDetail && state.modal?.kind === 'work') state.modal.observationRefresh?.();
   } catch(error) {
     if (session !== state.session) return;
     if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
@@ -262,9 +264,76 @@ function detailSection(title,text) {const section=node('section','detail-section
 function metadata(items) {
   const list=node('dl','details-meta'); for (const [title,text] of items) {list.append(node('dt','',title),node('dd','',text || 'Не указано'));}return list;
 }
+const nativeStateLabels = {pending:'Ожидает', 'in-progress':'В работе', blocked:'Ожидает действия',
+  done:'Закрыто в источнике', failed:'Ошибка в источнике', denied:'Отклонено в источнике',
+  canceled:'Отменено в источнике', 'handed-off':'Передано в источнике'};
+function nativeObservationPanel(item) {
+  const previousScroll=$('detail-body').scrollTop;let firstLoad=true;
+  const panel=node('section','native-observation detail-section');panel.setAttribute('aria-label','Нативные наблюдения');
+  panel.append(node('h3','','Нативные наблюдения'),node('p','detail-note','Только чтение источника. Личность менеджера, принятие решения и продолжение работы не подтверждены.'));
+  const all=[...new Set((item.sourceRefs || []).filter(ref => ref.system === 'openrig' && ref.type === 'qitem' && /^[A-Za-z0-9_-]{1,160}$/.test(ref.id)).map(ref => ref.id))];
+  const ids=all.slice(0,20),modal=state.modal;
+  modal.observationRefresh=null;
+  if (!ids.length) {
+    modal.originalId=null;panel.dataset.state='no-source';
+    panel.append(node('p','','В текущем окне нет доступного исходного поручения для чтения наблюдений. Это не подтверждает отсутствие решений в истории.'));
+    return panel;
+  }
+  modal.originalId=ids.includes(modal.originalId) ? modal.originalId : ids[0];
+  const label=node('label','observation-label','Исходное поручение'),select=node('select','observation-select');
+  for (const [index,id] of ids.entries()) {const option=node('option','',`${index+1}. ${id}`);option.value=id;select.append(option);}
+  select.value=modal.originalId;label.append(select);
+  const controls=node('div','observation-controls'),status=node('p','observation-status');status.setAttribute('role','status');
+  const result=node('div','observation-result'),reload=button('Обновить наблюдения',() => refresh());
+  controls.append(label,reload);panel.append(controls,status,result);
+  if (all.length>ids.length) panel.append(node('p','detail-note','Показаны первые 20 ссылок текущего окна. Полная история не загружена.'));
+  let request=0,pendingOriginal=null;
+  const valid=(sequence,session,original) => sequence === request && session === state.session && state.modal === modal && modal.originalId === original && panel.isConnected;
+  async function refresh() {
+    const original=modal.originalId;
+    if (!panel.isConnected || state.modal !== modal || pendingOriginal === original) return;
+    const sequence=++request,session=state.session;pendingOriginal=original;
+    const scrollAtStart=$('detail-body').scrollTop;
+    reload.setAttribute('aria-disabled','true');result.setAttribute('aria-busy','true');status.textContent='Читаем наблюдения…';panel.dataset.state='loading';
+    try {
+      const {data}=await api('/api/board/'+encodeURIComponent(item.id)+'/native-decisions/'+encodeURIComponent(original));
+      if (!valid(sequence,session,original)) return;
+      if (data.project !== item.project || data.mission !== item.mission || data.slice !== item.slice || data.originalTaskId !== original || data.source !== 'native_read_observation' || !['observed','unconfirmed'].includes(data.status) || !Array.isArray(data.observations) || !Array.isArray(data.linkedReplies) || ['humanIdentityVerified','decisionAccepted','ownerActionObserved','executionEnabled','retryAllowed'].some(key => data[key] !== false)) throw new Error('observation_contract_invalid');
+      const content=node('div');
+      content.append(metadata([['Исходное поручение',nativeStateLabels[data.originalState] || 'Состояние не подтверждено'],['Связанный запрос',data.currentAsk ? nativeStateLabels[data.currentAsk.state] || 'Состояние не подтверждено' : 'В этом чтении не наблюдался']]));
+      if (data.status === 'unconfirmed') content.append(node('p','observation-empty','В этом чтении записи аудита и связанные возвраты ответа не наблюдались. Результат не подтверждён.'));
+      const events=node('ul','observation-events');
+      for (const event of data.observations.slice(0,40)) {
+        const name=event.verb === 'answer' ? 'Запись аудита ответа' : 'Запись аудита изменения ожидания';
+        events.append(node('li','',`${name}: ${nativeStateLabels[event.beforeState] || 'Неизвестно'} → ${nativeStateLabels[event.afterState] || 'Неизвестно'}`));
+      }
+      for (const reply of data.linkedReplies.slice(0,20)) events.append(node('li','','Связанный возврат ответа наблюдался в источнике. Содержание и принятие решения не подтверждены.'));
+      if (events.children.length) content.append(events);
+      const incomplete=[data.queueWindowComplete,data.auditWindowComplete,data.replyWindowComplete].some(value => value !== true);
+      content.append(node('p','detail-note',incomplete ? 'Окно наблюдений неполное. По нему нельзя подтвердить отсутствие других записей или завершение работы.' : 'Проверено ограниченное текущее окно. Исторические запросы вне текущей связи не ищутся.'));
+      const refs=node('details','detail-provenance');refs.append(node('summary','','Связь наблюдений с источником'),node('p','',`Исходное поручение: ${original}`));
+      if (data.currentAsk) refs.append(node('p','',`Текущий запрос: ${data.currentAsk.taskId}`));
+      for (const event of data.observations.slice(0,40)) refs.append(node('p','',`Аудит: ${event.actionId} · поручение: ${event.targetTaskId}`));
+      for (const reply of data.linkedReplies.slice(0,20)) refs.append(node('p','',`Запрос: ${reply.askTaskId} · возврат: ${reply.replyTaskId}`));
+      content.append(refs);result.replaceChildren(content);
+      if (firstLoad && $('detail-body').scrollTop === scrollAtStart) $('detail-body').scrollTop=previousScroll;
+      firstLoad=false;status.textContent='Наблюдения прочитаны. Это не подтверждение действия человека.';panel.dataset.state=data.status;
+    } catch(error) {
+      if (!valid(sequence,session,original)) return;
+      if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
+      result.replaceChildren(node('p','observation-error','Наблюдения недоступны. Отсутствие записей не подтверждено; можно повторить чтение.'));
+      status.textContent='Ошибка чтения наблюдений';panel.dataset.state='error';
+    } finally {if (sequence === request) pendingOriginal=null;if (valid(sequence,session,original)) {reload.setAttribute('aria-disabled','false');result.setAttribute('aria-busy','false');}}
+  }
+  select.addEventListener('change',() => {modal.originalId=select.value;result.replaceChildren();refresh();});
+  modal.observationRefresh=refresh;queueMicrotask(() => {if (panel.isConnected && state.modal === modal) refresh();});
+  return panel;
+}
 function renderDetailError(text) {$('detail-body').replaceChildren(stateBox('Не удалось открыть',text,() => loadDetail(),'↻'));}
 function renderDetail(kind,item) {
   const scroll=$('detail-body').scrollTop;
+  const focused=document.activeElement;
+  const observationFocus=focused?.matches('.observation-select') ? '.observation-select' : focused?.matches('.observation-controls button') ? '.observation-controls button' : null;
   $('detail-title').textContent=kind === 'work' || kind === 'campaign' ? item.title : clientName(item);
   $('detail-eyebrow').textContent=kind === 'work' ? 'РАБОТА КОМАНДЫ · OPENRIG' : kind === 'campaign' ? 'КАМПАНИЯ · FIXTURE · PREVIEW-ONLY' : 'КАРТОЧКА КЛИЕНТА · CRM';
   if (kind === 'campaign') {renderCampaignDetail(item);return;}
@@ -275,6 +344,7 @@ function renderDetail(kind,item) {
       const section=node('section','detail-section');section.append(node('h3','','Что блокирует работу'));
       for (const blocker of item.blockers) section.append(node('p','blocker',blocker.requestedAction || 'Ожидание внешнего действия'));main.append(section);
     }
+    main.append(nativeObservationPanel(item));
     side.append(metadata([['Этап',columnLabels[item.column] || 'Неизвестно'],['Ответственные',item.owners?.map(ownerLabel).join(', ') || 'Пока не назначены'],['Источник','Нативная работа OpenRig']]));
     side.append(node('div','detail-note','Ответы, уточнения и диалог с оператором пока недоступны. Эта карточка открыта только для просмотра.'));
     const source=node('details','detail-provenance');source.append(node('summary','','Связь с источником'),node('p','',item.id));side.append(source);
@@ -298,6 +368,7 @@ function renderDetail(kind,item) {
     side.append(node('div','detail-note','Изменение записей выполняется в CRM. Эта страница ничего не сохраняет и не дополняет автоматически.'));
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
+  if (kind === 'work' && observationFocus) $('detail-body').querySelector(observationFocus)?.focus({preventScroll:true});
 }
 function renderCampaignDetail(item) {
   if (item.mode !== 'FIXTURE') {renderDetailError('Режим материала не подтверждён.');return;}

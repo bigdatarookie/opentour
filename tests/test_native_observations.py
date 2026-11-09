@@ -49,11 +49,22 @@ class SourceTests(unittest.TestCase):
         source=Native();result=observe(source,SLICE,'original')
         self.assertEqual(result['observations'][0]['actionId'],'action-1')
         self.assertEqual(result['status'],'observed')
+        self.assertEqual(result['originalState'],'blocked');self.assertIsNone(result['currentAsk'])
         for flag in ('humanIdentityVerified','decisionAccepted','ownerActionObserved','executionEnabled','retryAllowed'):
             self.assertFalse(result[flag])
         self.assertNotIn('PRIVATE',json.dumps(result))
         self.assertIn(('/api/mission-control/audit',{'qitem_id':'original','action_verb':'resolve','limit':20}),source.calls)
         self.assertTrue(all(path.startswith(('/api/queue/','/api/mission-control/audit')) for path,_ in source.calls))
+
+    def test_current_states_are_bounded_and_never_emit_unknown_source_words(self):
+        source=Native();source.events=[];source.rows['original']['state']='PRIVATE UNKNOWN STATE'
+        result=observe(source,SLICE,'original')
+        self.assertIsNone(result['originalState']);self.assertNotIn('PRIVATE',json.dumps(result))
+        source.rows['original']['state']='blocked';source.rows['original']['blockedOn']='ask'
+        source.rows['ask']=row('ask',state='PRIVATE UNKNOWN STATE',sourceSession=OWNER,destinationSession='human@external')
+        result=observe(source,SLICE,'original')
+        self.assertEqual(result['currentAsk'],{'taskId':'ask','state':None})
+        self.assertNotIn('PRIVATE',json.dumps(result))
 
     def test_membership_checked_before_any_row_or_audit_read(self):
         for key,slice_name in [('foreign',SLICE),('original','other'),('../private',SLICE)]:
@@ -94,6 +105,7 @@ class SourceTests(unittest.TestCase):
         source.rows['unrelated']=row('unrelated',state='pending',sourceSession='human@external',destinationSession=OWNER,replyTo='different-ask',tags=TAGS+['human-answer'])
         source.events=[audit('ask','answer')]
         result=observe(source,SLICE,'original')
+        self.assertEqual(result['currentAsk'],{'taskId':'ask','state':'done'})
         self.assertEqual(result['linkedReplies'],[{'askTaskId':'ask','replyTaskId':'reply','status':'native_linked_reply_observed'}])
         self.assertFalse(result['decisionAccepted']);self.assertFalse(result['ownerActionObserved'])
         self.assertNotIn('PRIVATE',json.dumps(result))
