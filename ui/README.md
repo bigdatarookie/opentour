@@ -56,3 +56,24 @@ python3 tools/campaign_preview_probe.py --proof-dir /private/tmp/opentour-campai
 ```
 
 The browser probe uses a process-local synthetic grant and empty synthetic board solely to open the existing shell, plus a task-owned temporary Chrome profile/session. It closes both browser and HTTP server. The opaque srcdoc frame is inaccessible to the installed agent-browser frame selector: internal DOM/style/mobile overflow checks are NOT RUN. Screenshots verify visible rendering; source checks cover the pinned inert transformation, and browser checks cover sandbox opacity, shell layout, text/manifest alternatives, focus, cleanup and no external requests. See proof/campaign/RESULTS.md. Independent QA and full slice acceptance remain separate.
+
+
+## Native observations in task detail
+
+The existing task modal shows read-only observations for up to 20 current scoped native source references. It displays original/current ask state, bounded audit entries and actual linked reply observations. No matching entries means unconfirmed; missing current references, incomplete windows and source errors have distinct text. Source IDs remain available under provenance. An observed audit/reply is explicitly not verified manager identity, accepted content or resumed owner work. No reply/decision/resume/chat or mutation control is added.
+
+Selection, focus and detail scroll survive board updates. Native observations refresh on the existing board read even with an unchanged board ETag, plus an explicit read-only refresh button. In-flight same-original reads are coalesced; session/modal/selection guards discard late responses. Access revocation clears the workspace through the existing auth handling. No additional polling controller, storage or task tracker is introduced. Campaign routes and fixture files stay unchanged.
+
+Use the existing browser harness for synthetic observations, including source errors, delayed responses and auth revocation:
+
+```sh
+python3 tools/ui_browser_probe.py --native-observations --proof-dir /private/tmp/opentour-observation-ui-proof
+```
+
+For the actual native read consumer, supply the existing specification root and a currently active assigned qitem in slice 03-operator-board. A completed handoff's old qitem is not a current source reference. This mode uses no CRM, private credential file or screenshots; it creates only the existing process-local diagnostic read grant and closes its task-owned browser/server:
+
+```sh
+python3 tools/ui_browser_probe.py --native-observations --native-work-root /absolute/existing/opentour-rig --native-original-id <current-active-scoped-qitem>
+```
+
+Builder evidence: 19 targeted synthetic browser checks, 19 existing synthetic task/client checks, and 8 native-only live browser checks passed. Backend/native/campaign tests passed (21/10/8). Visible matching audit/reply cases are synthetic; real positive human decision/reply/resume and full slice acceptance remain unproven. Independent Code QA then scoped System QA must review the same candidate before integration. Detailed evidence: proof/native-observations/RESULTS.md.

@@ -1213,7 +1213,21 @@ dialog>h2 {
 .campaign-detail .detail-provenance>button {display:block;margin-top:8px;}
 @media(max-width:800px) {.campaign-card{padding:19px}.campaign-card h2{font-size:18px}.fixture-notice{padding:16px}.campaign-facts{padding:13px}.campaign-facts dl{grid-template-columns:1fr;gap:7px}.campaign-facts dd{margin-bottom:9px}.email-preview-frame{height:760px}.preview-switch button{padding:9px 11px;font-size:11px}}
 
-/* Long campaign titles must leave the footer and scrollable preview reachable. */
-dialog[open]:has(.campaign-detail) {display:flex;flex-direction:column;}
-dialog:has(.campaign-detail)>.dialog-header,dialog:has(.campaign-detail)>h2,dialog:has(.campaign-detail)>.dialog-footer {flex-shrink:0;}
-dialog:has(.campaign-detail)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
+/* Long task/campaign titles must leave the footer and scrollable detail reachable. */
+dialog[open]:has(.campaign-detail,.native-observation) {display:flex;flex-direction:column;}
+dialog:has(.campaign-detail,.native-observation)>.dialog-header,dialog:has(.campaign-detail,.native-observation)>h2,dialog:has(.campaign-detail,.native-observation)>.dialog-footer {flex-shrink:0;}
+dialog:has(.campaign-detail,.native-observation)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
+
+.native-observation {border-top:1px solid var(--line);padding-top:22px;margin-top:25px;overflow-wrap:anywhere;}
+.observation-controls {display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:16px 0;}
+.observation-label {display:block;min-width:0;flex:1 1 220px;font-size:11px;color:#52664d;}
+.observation-select {display:block;width:100%;max-width:100%;margin-top:7px;padding:10px;border:1px solid #cdd8c5;border-radius:7px;background:#fff;color:var(--ink);font:inherit;}
+.observation-status {font-size:11px;color:#52664d;}
+.observation-events {padding-left:20px;font-size:12px;line-height:1.7;}
+.observation-events li {margin-bottom:10px;}
+.native-observation .observation-error {color:#8b351e;}
+.native-observation .details-meta {margin:15px 0;}
+
+.observation-controls button[aria-disabled="true"] {opacity:.65;}
+
+.native-observation h3,.native-observation dt,.native-observation .detail-provenance summary {color:#52664d;}

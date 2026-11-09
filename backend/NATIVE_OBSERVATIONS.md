@@ -1,6 +1,6 @@
 # Read-only native decision observations
 
-This extends the existing backend's board reads. It does not enable a decision, reply, comment, retry or manager login. No UI or external prototype change is included.
+This extends the existing backend's board reads. It does not enable a decision, reply, comment, retry or manager login. The existing task UI consumes these observations without reply or decision controls; no external prototype is integrated.
 
 GET /api/board/work:opentour:01-local-information-layer:<slice>/native-decisions/<original-qitem-id> uses the existing application read grant and project checks. The original must be in that slice's current native catalog/queue snapshot, with project, mission and slice tags. Unknown IDs and slices are refused before full-row or audit reads. Source project/mission configuration must match the service. Browser-supplied audit filters, actors, upstream URLs, original/ask authority or decision content are not accepted. Mutations remain HTTP 403 for both roles.
 
@@ -16,7 +16,7 @@ The output deliberately keeps humanIdentityVerified, decisionAccepted, ownerActi
 
 Installed OpenRig 0.7.7: daemon/dist/routes/mission-control.js GET /audit under /api/mission-control supports qitem_id, action_verb and limit. domain/mission-control/audit-browse.js returns rows/hasMore/nextBeforeId. domain/mission-control/mission-control-write-contract.js snapshotQitem supplies IDs/states; answerAsk writes actual linked native return rows via QueueRepository.createHumanAnswer. routes/queue.js GET /:qitemId returns the stored row. The source paths are relative to the installed @openrig/cli package; no write endpoint was exercised.
 
-## Developer verification — 2026-11-09
+## Original read-seam verification — 2026-11-09
 
 - 9 targeted tests in tests/test_native_observations.py pass: bounded source metadata, privacy filtering, source and slice membership before lookup, misconfigured source project, source/custody change, invalid audit, incomplete/absent observations, actual stored ask/reply correlation, unrelated owner refusal, authenticated HTTP scope and mutation denial.
 - Existing 21 backend tests and 16 native action contract tests pass. Tests are synthetic and include local HTTP servers; they make no live source mutations.
@@ -28,3 +28,8 @@ python3 tools/native_observation_probe.py --work-root /absolute/existing/opentou
 ```
 
 Actual native read of the Developer's current scoped assignment qitem-20261109081714-6c7fcd91 returned authenticated HTTP 200, unauthenticated 401, zero audit entries and zero linked replies, complete bounded queue/audit windows and status unconfirmed. All identity/acceptance/owner-action/execution/retry flags remained false. This proves the negative source read integration, not a live recorded answer or resumed work. No raw source values, actors, decision words or credentials were emitted. Independent QA pending; no full slice acceptance or deployment.
+
+
+## Task UI consumer
+
+The response additionally projects originalState and currentAsk (taskId/state or null) from the already-scoped source snapshots. States outside the fixed native enum become null; no new source reads, raw blocker/actor/decision fields or authority are added. The UI selects only bounded current source references attached to the existing aggregate work card and requests one observation at a time. See ../ui/proof/native-observations/RESULTS.md for consumer verification and remaining limits.
