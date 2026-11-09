@@ -3,7 +3,8 @@
 const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
-  trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0 };
+  trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0,
+  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map() };
 const roles = {developer:'Разработка',devops:'Инфраструктура','qa-code':'Проверка кода','qa-system':'Проверка системы',
   engineer:'Данные',creative:'Креатив',designer:'Дизайн',operator:'Оператор',lead:'Координация'};
 const columnLabels = {planned:'Запланировано',in_progress:'В работе',needs_human:'Требуется человек',review:'На проверке',done:'Выполнено',unknown:'Неизвестно'};
@@ -21,7 +22,7 @@ function announce(text) { $('announcement').textContent = text; }
 function timeLabel() { return new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}); }
 function errorText(error) {
   const code = error.code || '';
-  if (error.status === 401) return 'Доступ не подтверждён. Проверьте ключ чтения OpenTour.';
+  if (error.status === 401) return 'Доступ не подтверждён. Проверьте ключ доступа OpenTour.';
   if (error.status === 403) return 'У этого доступа нет разрешения на просмотр проекта.';
   if (code === 'crm_read_credential_not_configured' || code === 'source_access_unavailable') return 'CRM пока недоступна. Подключение требует проверки.';
   if (error.status === 404) return 'Запись больше не доступна в текущем проекте.';
@@ -33,7 +34,8 @@ async function api(path, options={}) {
   try {
     const headers = {Authorization: `Bearer ${state.token}`};
     if (options.etag) headers['If-None-Match'] = options.etag;
-    const response = await fetch(path, {method:'GET', headers, cache:'no-store', credentials:'omit', signal:controller.signal});
+    if (options.body) headers['Content-Type']='application/json';
+    const response = await fetch(path, {method:options.body ? 'POST' : 'GET', body:options.body ? JSON.stringify(options.body) : undefined, headers, cache:'no-store', credentials:'omit', signal:controller.signal});
     if (response.status === 304) return {unchanged:true};
     const data = await response.json();
     if (!response.ok) {
@@ -63,6 +65,7 @@ function resetSession(message='') {
   state.session++; state.token=''; state.board=null; state.etag=null; state.clients=null;
   state.clientRequest++; state.modalRequest++; state.boardBusy=false; state.modal=null;
   state.campaignRequest++;state.campaigns=null;
+  state.boardAccess=null;state.appTasks=[];state.appBusy=false;state.drafts.clear();$('app-tasks').hidden=true;$('app-task-list').replaceChildren();
   state.trigger=null;state.offset=0;state.nextOffset=null;
   clearInterval(state.poll); clearTimeout(state.debounce);
   if ($('detail-dialog').open) $('detail-dialog').close();
@@ -82,6 +85,8 @@ $('connect-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/capabilities').then(({data}) => {
       if (session !== state.session) return;
+      state.boardAccess=data.boardConversations || null;
+      $('access-mode').textContent=state.boardAccess?.respond ? 'Ответы в задачах' : 'Только чтение';
       $('synthetic-banner').hidden=data.dataMode !== 'synthetic';
       $('connect-panel').hidden=true; $('workspace').hidden=false; $('disconnect').hidden=false;
       $('access-token').value=''; $('connect-status').textContent='';
@@ -147,6 +152,7 @@ function renderBoard() {
 }
 
 async function loadBoard(quiet=false) {
+  if (state.boardAccess?.read) loadAppTasks();
   if (!state.token || state.boardBusy) return;
   state.boardBusy=true; const session=state.session;
   if (!state.board) loadingBoard();
@@ -334,6 +340,7 @@ function renderDetail(kind,item) {
   const scroll=$('detail-body').scrollTop;
   const focused=document.activeElement;
   const observationFocus=focused?.matches('.observation-select') ? '.observation-select' : focused?.matches('.observation-controls button') ? '.observation-controls button' : null;
+  if (kind === 'app') {renderAppTask(item);return;}
   $('detail-title').textContent=kind === 'work' || kind === 'campaign' ? item.title : clientName(item);
   $('detail-eyebrow').textContent=kind === 'work' ? 'РАБОТА КОМАНДЫ · OPENRIG' : kind === 'campaign' ? 'КАМПАНИЯ · FIXTURE · PREVIEW-ONLY' : 'КАРТОЧКА КЛИЕНТА · CRM';
   if (kind === 'campaign') {renderCampaignDetail(item);return;}
@@ -405,6 +412,7 @@ function renderCampaignDetail(item) {
 }
 function openDetails(kind,id,trigger) {
   state.modal={kind,id,version:null};state.trigger=trigger;
+  $('detail-mode').textContent='Режим просмотра';
   $('detail-title').textContent='Подробности';$('detail-body').replaceChildren(node('div','skeleton'),node('p','loading-label','Загружаем подробности…'));
   $('detail-dialog').showModal();$('close-detail').focus();loadDetail();
 }
@@ -412,7 +420,7 @@ async function loadDetail() {
   if (!state.modal) return;
   const request=++state.modalRequest,session=state.session,{kind,id}=state.modal;
   try {
-    const {data}=await api((kind === 'work' ? '/api/board/' : kind === 'campaign' ? '/api/campaigns/' : '/api/clients/')+encodeURIComponent(id));
+    const {data}=await api((kind === 'app' ? '/api/board-tasks/' : kind === 'work' ? '/api/board/' : kind === 'campaign' ? '/api/campaigns/' : '/api/clients/')+encodeURIComponent(id));
     if (request !== state.modalRequest || session !== state.session || state.modal?.id !== id) return;
     renderDetail(kind,data);
   } catch(error) {
@@ -428,3 +436,84 @@ $('detail-dialog').addEventListener('close',() => {
   if (state.trigger?.isConnected) state.trigger.focus({preventScroll:true});else if(selected) restoreCardFocus(selected);
   state.trigger=null;
 });
+
+
+// Application conversations are independent from the native execution projection.
+async function loadAppTasks() {
+  if (!state.token || !state.boardAccess?.read || state.appBusy) return;
+  const session=state.session;state.appBusy=true;$('app-tasks').hidden=false;
+  try {
+    const {data}=await api('/api/board-tasks');
+    if (session !== state.session) return;
+    state.appTasks=data.items;
+    const items=document.createDocumentFragment();
+    for (const item of data.items) {
+      const card=button('',() => openDetails('app',item.id,card),'task-card');card.dataset.objectId=item.id;
+      card.append(node('span','task-kind','Обсуждение · OpenTour'),node('h3','',item.title),node('p','',item.description));items.append(card);
+    }
+    if (!data.items.length) items.append(node('p','','Доступных обсуждений пока нет.'));
+    if (!data.complete) items.append(node('p','','Показана часть доступных задач.'));
+    $('app-task-list').replaceChildren(items);$('app-task-status').textContent='Обновлено в '+timeLabel();
+  } catch(error) {
+    if (session !== state.session) return;
+    if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
+    $('app-task-list').replaceChildren();$('app-task-status').textContent='Обсуждения недоступны. Обновите данные, чтобы повторить чтение.';
+  } finally {if (session === state.session) state.appBusy=false;}
+}
+const deliveryLabels={pending:'Ожидает доставки агенту',delivered:'Контекст доставлен в очередь агента',failed:'Доставка отклонена до отправки',unknown:'Результат доставки неизвестен — требуется сверка'};
+function renderAppTask(item) {
+  const scroll=$('detail-body').scrollTop;
+  $('detail-mode').textContent=state.boardAccess?.respond ? 'Ответ сохраняется в OpenTour' : 'Режим просмотра';
+  $('detail-title').textContent=item.title;$('detail-eyebrow').textContent='ОБСУЖДЕНИЕ ЗАДАЧИ · OPENTOUR';
+  const root=node('div','app-task-detail');
+  root.append(detailSection('Задача',item.description),node('p','detail-note','Ответ сохраняется в OpenTour. Доставка контекста не подтверждает работу агента и не разрешает бизнес-действие.'));
+  const history=node('section','app-history');history.setAttribute('aria-label','Обсуждение задачи');
+  for (const message of item.messages) {
+    const entry=node('article','app-message');entry.dataset.messageId=message.id;
+    entry.append(node('h3','',({request:'Запрос',answer:'Ответ',comment:'Комментарий'})[message.kind]),node('p','message-body',message.body));
+    if (message.reply_to) {const request=item.messages.find(m => m.id === message.reply_to);entry.append(node('p','detail-note','Ответ на запрос: '+(request ? request.body : 'Предыдущий запрос этой задачи')));}
+    entry.append(node('p','detail-note','Сохранено · '+(deliveryLabels[message.delivery.state] || 'Доставка не подтверждена')),
+      node('p','detail-note','Обработка агентом: '+(message.delivery.processing === 'received' ? 'получение контекста подтверждено' : 'не подтверждена')));
+    history.append(entry);
+  }
+  if (!item.historyComplete) history.append(node('p','','Показаны последние 100 сообщений; история неполная.'));
+  root.append(history,button('Обновить обсуждение',() => loadDetail()));
+  if (state.boardAccess?.respond) {
+    let draft=state.drafts.get(item.id);
+    if (!draft) {draft={text:'',replyTo:[...item.messages].reverse().find(m => m.kind === 'request')?.id || '',requestId:null,frozen:null};state.drafts.set(item.id,draft);}
+    const form=node('form','app-response');
+    const label=node('label','','Ответ или комментарий');label.htmlFor='app-response-text';
+    const target=node('select','observation-select');target.id='app-response-target';target.setAttribute('aria-label','Связь ответа с запросом');
+    const generic=node('option','','Комментарий к работе');generic.value='';target.append(generic);
+    for (const message of item.messages.filter(m => m.kind === 'request')) {const option=node('option','','Ответить: '+message.body.slice(0,100));option.value=message.id;target.append(option);}
+    if (draft.replyTo && ![...target.options].some(option => option.value === draft.replyTo)) {const earlier=node('option','','Ответ на предыдущий запрос задачи');earlier.value=draft.replyTo;target.append(earlier);}
+    target.value=draft.replyTo;
+    const input=node('textarea');input.id='app-response-text';input.maxLength=4000;input.required=true;input.value=draft.text;
+    const status=node('p','connection-status');status.setAttribute('role','status');
+    const submit=node('button','primary-button',draft.frozen ? 'Повторить сохранение' : 'Сохранить ответ');submit.type='submit';
+    if (draft.frozen) {input.readOnly=true;target.disabled=true;status.textContent='Сохранение пока не подтверждено. Повтор использует тот же запрос и не дублирует сообщение.';}
+    input.addEventListener('input',() => {draft.text=input.value;});
+    target.addEventListener('change',() => {draft.replyTo=target.value;});
+    form.addEventListener('submit',async event => {
+      event.preventDefault();if(submit.disabled) return;
+      const session=state.session;
+      if (!draft.frozen) {draft.requestId=crypto.randomUUID();draft.frozen={requestId:draft.requestId,kind:draft.replyTo ? 'answer' : 'comment',text:draft.text,...(draft.replyTo ? {replyTo:draft.replyTo} : {})};}
+      submit.disabled=true;input.readOnly=true;target.disabled=true;status.textContent='Сохраняем…';
+      try {
+        await api('/api/board-tasks/'+encodeURIComponent(item.id)+'/messages',{body:draft.frozen});
+        if (session !== state.session) return;
+        state.drafts.delete(item.id);announce('Ответ сохранён в OpenTour. Доставка агенту учитывается отдельно.');
+        if(state.modal?.kind === 'app' && state.modal.id === item.id) await loadDetail();
+      } catch(error) {
+        if (session !== state.session) return;
+        if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
+        if ([400,413,415].includes(error.status)) {
+          draft.frozen=null;draft.requestId=null;input.readOnly=false;target.disabled=false;
+          status.textContent='Ответ не сохранён. Исправьте текст и попробуйте снова.';submit.textContent='Сохранить ответ';
+        } else {status.textContent='Сохранение не подтверждено. Текст сохранён в этой вкладке. Повторите тот же запрос.';submit.textContent='Повторить сохранение';}
+      } finally {submit.disabled=false;}
+    });
+    form.append(label,target,input,node('p','field-hint','Не вводите пароли и ключи доступа. Закрытие окна сохраняет черновик в этой вкладке.'),submit,status);root.append(form);
+  }
+  $('detail-body').replaceChildren(root);$('detail-body').scrollTop=scroll;
+}

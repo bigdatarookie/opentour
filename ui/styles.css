@@ -1231,3 +1231,19 @@ dialog:has(.campaign-detail,.detail-grid)>.detail-body {flex:1 1 auto;min-height
 .observation-controls button[aria-disabled="true"] {opacity:.65;}
 
 .native-observation h3,.native-observation dt,.native-observation .detail-provenance summary {color:#52664d;}
+
+.app-task-list {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:16px;margin:18px 0 30px;}
+.app-task-list .task-card {width:100%;overflow-wrap:anywhere;}
+.app-task-detail {overflow-wrap:anywhere;}
+.app-message {border-bottom:1px solid var(--line);padding:14px 0;}
+.app-message h3 {font-size:14px;}
+.message-body {white-space:pre-wrap;}
+.app-response {display:grid;gap:12px;margin-top:24px;}
+.app-response textarea {width:100%;min-height:130px;padding:12px;border:1px solid #cdd8c5;border-radius:7px;font:inherit;color:var(--ink);resize:vertical;}
+.app-response textarea:focus {outline:2px solid #224e43;outline-offset:2px;}
+.app-response .primary-button {justify-self:start;}
+dialog[open]:has(.app-task-detail) {display:flex;flex-direction:column;}
+dialog:has(.app-task-detail)>.dialog-header,dialog:has(.app-task-detail)>h2,dialog:has(.app-task-detail)>.dialog-footer {flex-shrink:0;}
+dialog:has(.app-task-detail)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
+
+.app-task-detail .detail-note,.app-task-detail .field-hint {color:#52664d;}
