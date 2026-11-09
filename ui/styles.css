@@ -1247,3 +1247,5 @@ dialog:has(.app-task-detail)>.dialog-header,dialog:has(.app-task-detail)>h2,dial
 dialog:has(.app-task-detail)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
 
 .app-task-detail .detail-note,.app-task-detail .field-hint {color:#52664d;}
+
+.related-tasks button {display:block;max-width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;margin:10px 0;}
