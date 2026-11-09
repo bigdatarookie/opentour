@@ -38,3 +38,10 @@
 **Правило.** OpenTour DB owns app-facing board tasks, requests, answers/comments, explicit links, and durable delivery/processing state for relevant agent context. OpenRig queue owns execution custody and native action evidence; qitem IDs may be linked as execution references but do not reconstruct the business conversation. Persisting an answer does not authorize a business action. Source decision: qitem `qitem-20261109190846-d470ffea`; policy implementation: qitem `qitem-20261109191014-71592011`.
 
 **Application status.** The current SPEC and PLATFORM state the boundary. The Lead-owned architecture/UI and slice documents remain outside this change. Delivery of this scoped candidate is recorded; backend persistence, independent review, merge, and consumer effect remain unverified.
+
+
+## opentour-20261110-context-delivery-boundary-qa-correction
+
+**Finding/correction.** Independent QA of candidate `b58fc205dca6d4bd2f8670c99fd62514dfc62bf3` identified that “delivery/processing state” could be read as a second writable authority for task progress. The v0.9 policy now limits OpenTour DB delivery state to the bounded context-message outbox lifecycle: enqueue, delivery attempt, and terminal receipt. A terminal receipt means the fixed native queue accepted the scoped context message and the returned qitem ID was durably linked as an execution reference. It does not mean read, action, or task completion. Unknown outcomes reconcile by stable delivery identity before retry. OpenRig queue remains authoritative for execution custody, ownership/progress/result, and native action evidence; any app view of execution state is read-only. A receipt does not authorize business action.
+
+**Status.** Policy text is corrected in SPEC and PLATFORM in response to QA qitem `qitem-20261109192014-8a1e119e`; behavior and consumer effect remain unverified pending implementation and independent re-review.
