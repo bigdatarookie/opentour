@@ -196,6 +196,20 @@ class PublicPathTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(detail['provenance']['entity'], 'Contact')
 
+    def test_ui_shell_and_fixed_assets_are_public_but_data_stays_protected(self):
+        for path, mime in (('/', 'text/html'), ('/ui/app.js','text/javascript'), ('/ui/styles.css','text/css')):
+            with urllib.request.urlopen(self.base + path, timeout=3) as response:
+                raw = response.read().decode()
+                self.assertEqual(response.status, 200)
+                self.assertIn(mime,response.headers['Content-Type'])
+                self.assertEqual(response.headers['Cache-Control'],'no-store')
+                self.assertNotIn(TOKEN,raw)
+                self.assertNotIn('synthetic@example.invalid',raw)
+                self.assertNotIn('unsafe-inline',response.headers['Content-Security-Policy'])
+        self.assertEqual(self.request('/api/clients',token=None)[0],401)
+        self.assertEqual(self.request('/ui/../../backend/server.py')[0],404)
+        self.assertEqual(self.request('/ui/secrets.json')[0],404)
+
     def test_public_board_detail_and_conditional_polling(self):
         status, body, headers = self.request('/api/board')
         self.assertEqual(status, 200)

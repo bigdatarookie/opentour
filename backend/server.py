@@ -21,7 +21,15 @@ class Server(ThreadingHTTPServer):
         return connection, address
 
 
-def make_server(service, auth, port=18083):
+STATIC = Path(__file__).resolve().parents[1] / 'ui'
+UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
+            '/ui/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+            '/ui/styles.css': ('styles.css', 'text/css; charset=utf-8')}
+
+
+def make_server(service, auth, port=18083, data_mode='live'):
+    if data_mode not in ('live', 'synthetic'):
+        raise ValueError('invalid data mode')
     class Handler(BaseHTTPRequestHandler):
         server_version = 'OpenTourLocal'
 
@@ -42,6 +50,20 @@ def make_server(service, auth, port=18083):
             self.end_headers()
             self.wfile.write(raw)
 
+        def ui_file(self, path):
+            filename, content_type = UI_FILES[path]
+            raw = (STATIC / filename).read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(raw)
+
         def handle_request(self):
             try:
                 allowed = {'127.0.0.1:' + str(self.server.server_port), 'localhost:' + str(self.server.server_port)}
@@ -54,6 +76,9 @@ def make_server(service, auth, port=18083):
                 if url.scheme or url.netloc or len(self.path) > 4096:
                     raise Failure('invalid_request', 400)
                 path = urllib.parse.unquote(url.path)
+                if self.command == 'GET' and path in UI_FILES and not url.query:
+                    # Public shell has no embedded data, tokens, source URLs or private files.
+                    return self.ui_file(path)
                 if self.command == 'GET' and path == '/healthz':
                     return self.respond(200, {'status': 'ok', 'service': 'opentour-read-backend', 'integrationReady': False})
                 principal = auth.authorize(self.headers.get('Authorization'))
@@ -68,7 +93,7 @@ def make_server(service, auth, port=18083):
                     raise Failure('project_forbidden', 403)
                 params.pop('project', None)
                 if path == '/api/capabilities' and not params:
-                    data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board'],
+                    data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board'], 'dataMode': data_mode,
                             'writes': {'enabled': False, 'reason': WRITE_LIMITATION},
                             'dialogue': {'enabled': False, 'reason': WRITE_LIMITATION}}
                 elif path == '/api/clients':
