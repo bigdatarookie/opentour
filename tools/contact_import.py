@@ -176,7 +176,8 @@ class CRM:
                 if field == "emailAddress":
                     matches = any(value.strip().casefold() == key_value.casefold() for value in values)
                 else:
-                    matches = any(value.strip() == key_value.strip() for value in values)
+                    accepted_phone_forms = {raw_value.strip(), key_value.strip()}
+                    matches = any(value.strip() in accepted_phone_forms for value in values)
                 if matches:
                     found[obj["id"]] = obj
         return list(found.values())

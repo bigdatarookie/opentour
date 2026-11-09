@@ -138,6 +138,9 @@ def normalize_phone(value: str, *, previous_assumption: str | None = None) -> di
         if not 8 <= len(digits) <= 15:
             result.update(status="invalid", reason="international_length_out_of_range")
             return result
+        if digits.startswith("0"):
+            result.update(status="invalid", reason="international_calling_code_starts_with_zero")
+            return result
         if digits.startswith("7") and len(digits) != 11:
             result.update(status="invalid", reason="default_code_length_out_of_range")
             return result
