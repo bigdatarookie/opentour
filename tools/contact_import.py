@@ -341,9 +341,257 @@ def append_disposition(checkpoint: dict[str, Any], row: dict[str, Any], disposit
     atomic_private_json(CHECKPOINT_PATH, checkpoint)
 
 
+def checkpoint_phone_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row.get(key) for key in (
+            "normalized_phone", "assumed_calling_code", "phone_normalization_status",
+            "phone_normalization_reason", "phone_normalization_version",
+        ) if row.get(key) is not None
+    }
+
+
+def reconcile_row_channels(row: dict[str, Any], crm: CRM) -> dict[str, dict[str, Any]]:
+    """Read exact source and normalized channels; never write or infer a match."""
+    found: dict[str, dict[str, Any]] = {}
+    if row.get("email_key"):
+        found.update({obj["id"]: obj for obj in crm.query(
+            "emailAddress", row["email_raw"], row["email_key"]
+        )})
+    if row.get("phone_key"):
+        found.update({obj["id"]: obj for obj in crm.query(
+            "phoneNumber", row["phone_raw"], row["phone_key"]
+        )})
+    return found
+
+
+def atomic_private_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd, name = tempfile.mkstemp(prefix=".checkpoint-backup-", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        os.chmod(path, 0o600)
+    finally:
+        try:
+            os.unlink(name)
+        except FileNotFoundError:
+            pass
+
+
+def preserve_checkpoint_backup(checkpoint_path: Path, backup_path: Path) -> None:
+    original = checkpoint_path.read_bytes()
+    if backup_path.exists():
+        if hashlib.sha256(backup_path.read_bytes()).digest() != hashlib.sha256(original).digest():
+            raise ImportFailure("checkpoint_migration_backup_conflict")
+        return
+    atomic_private_bytes(backup_path, original)
+
+
+def migrate_checkpoint_phone_normalization(checkpoint: dict[str, Any], rows: list[dict[str, Any]],
+                                           mapping: dict[str, Any], crm: CRM,
+                                           normalizer_version: str) -> tuple[dict[str, Any], Counter[str]]:
+    """Build format 3 from a legacy format-2 checkpoint after read reconciliation.
+
+    Historical row values are retained under legacy_rows. Only rows
+    with definitive validation rejection and no current exact channel match are
+    omitted from active rows, allowing a later normal importer run to use the
+    newly normalized payload. This function itself never creates Contacts.
+    """
+    if checkpoint.get("format") == 3:
+        if checkpoint.get("phone_normalization_version") == normalizer_version:
+            return checkpoint, Counter({"already_current": 1})
+        raise ImportFailure("checkpoint_phone_normalization_version_conflict")
+    if checkpoint.get("format") != 2 or checkpoint.get("source_identity_scheme") != "fixed_source_ordinal_v1":
+        raise ImportFailure("checkpoint_phone_normalization_legacy_format_unsupported")
+    if checkpoint.get("mapping_version") != mapping.get("mapping_version"):
+        raise ImportFailure("checkpoint_mapping_version_mismatch")
+    legacy_rows = checkpoint.get("rows")
+    if not isinstance(legacy_rows, dict):
+        raise ImportFailure("checkpoint_rows_invalid")
+    old_version = checkpoint.get("phone_normalization_version")
+    if old_version not in (None, normalizer_version):
+        raise ImportFailure("checkpoint_phone_normalization_version_conflict")
+
+    by_ref: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("phone_normalization_version") != normalizer_version:
+            raise ImportFailure("source_row_phone_normalizer_version_mismatch")
+        if row.get("phone_key") != row.get("normalized_phone"):
+            raise ImportFailure("source_row_normalized_phone_key_mismatch")
+        ref = source_reference(row)
+        if ref in by_ref:
+            raise ImportFailure("checkpoint_source_identity_collision")
+        by_ref[ref] = row
+    if not legacy_rows and by_ref:
+        raise ImportFailure("empty_checkpoint_source_effects_unaccounted")
+    if set(legacy_rows) != set(by_ref):
+        raise ImportFailure("checkpoint_source_row_set_mismatch")
+    for ref, entry in legacy_rows.items():
+        row = by_ref[ref]
+        if not isinstance(entry, dict):
+            raise ImportFailure("checkpoint_entry_invalid")
+        if (entry.get("source_ordinal") != row["source_ordinal"]
+                or entry.get("source_identity") != source_identity(row)
+                or entry.get("source_revision") != row["source_revision"]
+                or entry.get("logical_row") != row["logical_row"]
+                or entry.get("mapping_version") != row["mapping_version"]):
+            raise ImportFailure("checkpoint_source_lineage_mismatch")
+
+    active_rows: dict[str, dict[str, Any]] = {}
+    dispositions: Counter[str] = Counter()
+    local_no_effect = {
+        "blank_record", "field_width_mismatch", "no_usable_channel",
+        "ambiguous_source_channel_collision", "ambiguous_source_email_collision",
+        "normalization_collision", "invalid_phone_number", "ambiguous_phone_number",
+    }
+    destination_exclusions = {
+        "destination_conflict_without_channel_match",
+        "destination_channels_resolve_to_different_contacts",
+        "destination_validation_rejected",
+    }
+
+    for ref, old_entry in legacy_rows.items():
+        row = by_ref[ref]
+        disposition = old_entry.get("disposition")
+        reason = old_entry.get("reason")
+        next_entry = dict(old_entry)
+        next_entry.update(checkpoint_phone_metadata(row))
+
+        if disposition in ("created", "create_reconciled"):
+            contact_id = old_entry.get("crm_contact_id")
+            if not isinstance(contact_id, str) or not contact_id:
+                raise ImportFailure("legacy_created_contact_id_missing")
+            contact = crm.get_contact(contact_id)
+            if not contact or contact.get("description") != contact_marker(row):
+                raise ImportFailure("legacy_created_contact_marker_mismatch")
+            matches = reconcile_row_channels(row, crm)
+            if set(matches) != {contact_id}:
+                raise ImportFailure("legacy_created_contact_channel_reconciliation_failed")
+            active_rows[ref] = next_entry
+            dispositions["created_effect_verified"] += 1
+            continue
+
+        if disposition == "not_created":
+            contact_id = old_entry.get("crm_contact_id")
+            if not isinstance(contact_id, str) or not contact_id:
+                raise ImportFailure("legacy_existing_contact_id_missing")
+            contact = crm.get_contact(contact_id)
+            matches = reconcile_row_channels(row, crm)
+            if not contact or set(matches) != {contact_id}:
+                raise ImportFailure("legacy_existing_contact_reconciliation_failed")
+            active_rows[ref] = next_entry
+            dispositions["existing_effect_verified"] += 1
+            continue
+
+        if disposition == "halted" and reason == "unknown_create_effect_requires_review":
+            matches = reconcile_row_channels(row, crm)
+            marked = [obj for obj in matches.values() if obj.get("description") == contact_marker(row)]
+            if len(matches) != 1 or len(marked) != 1:
+                raise ImportFailure("legacy_unknown_create_effect_unresolved")
+            next_entry.update(disposition="create_reconciled",
+                              reason="legacy_unknown_effect_source_marker_reconciled",
+                              crm_contact_id=marked[0]["id"])
+            active_rows[ref] = next_entry
+            dispositions["unknown_effect_reconciled"] += 1
+            continue
+
+        if disposition == "halted" and reason == "destination_auth_or_scope_error":
+            active_rows[ref] = next_entry
+            dispositions["terminal_halted_preserved"] += 1
+            continue
+
+        if disposition == "excluded" and reason in local_no_effect:
+            if row.get("disposition") == "candidate":
+                dispositions["local_exclusion_safe_to_reconsider"] += 1
+                continue
+            if row.get("disposition") == "excluded":
+                next_entry["reason"] = row["reason"]
+            active_rows[ref] = next_entry
+            dispositions["local_exclusion_preserved"] += 1
+            continue
+
+        if disposition == "excluded" and reason in destination_exclusions:
+            matches = reconcile_row_channels(row, crm)
+            if row.get("disposition") == "excluded":
+                next_entry["reason"] = row["reason"]
+                active_rows[ref] = next_entry
+                dispositions["current_source_exclusion_preserved"] += 1
+                continue
+            if reason == "destination_validation_rejected" and row.get("disposition") == "candidate":
+                if not matches:
+                    # The historic 400/422 rejection is retained in legacy_rows;
+                    # absence of an exact current match makes this row eligible
+                    # for a future importer run with the new payload.
+                    dispositions["validation_rejection_safe_to_reconsider"] += 1
+                    continue
+                if len(matches) == 1:
+                    next_entry.update(disposition="not_created",
+                                      reason="legacy_validation_rejection_existing_match_preserved",
+                                      crm_contact_id=next(iter(matches)))
+                else:
+                    next_entry.update(reason="legacy_validation_rejection_multiple_current_matches")
+            active_rows[ref] = next_entry
+            dispositions["destination_exclusion_preserved"] += 1
+            continue
+
+        raise ImportFailure("legacy_checkpoint_disposition_unrecognized")
+
+    migrated = {
+        "format": 3,
+        "source_identity_scheme": "fixed_source_ordinal_v1",
+        "mapping_version": checkpoint["mapping_version"],
+        "phone_normalization_version": normalizer_version,
+        "rows": active_rows,
+        "legacy_rows_format2": legacy_rows,
+        "phone_normalization_migration": {
+            "from_format": 2,
+            "from_phone_normalization_version": old_version,
+            "history_row_count": len(legacy_rows),
+            "active_row_count": len(active_rows),
+            "reconsidered_validation_rejection_count": dispositions["validation_rejection_safe_to_reconsider"],
+        },
+    }
+    return migrated, dispositions
+
+
+def persist_phone_checkpoint_migration(original: dict[str, Any], migrated: dict[str, Any],
+                                        dispositions: Counter[str]) -> bool:
+    """Atomically retain the old checkpoint, then install the reconciled format-3 state."""
+    if migrated is original:
+        return True
+    if not CHECKPOINT_PATH.is_file():
+        raise ImportFailure("legacy_checkpoint_missing_at_migration_commit")
+    current = json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
+    if current != original:
+        raise ImportFailure("checkpoint_changed_during_migration")
+    backup = PRIVATE_DIR / "import-checkpoint-format2-before-phone-normalization.json"
+    preserve_checkpoint_backup(CHECKPOINT_PATH, backup)
+    atomic_private_json(CHECKPOINT_PATH, migrated)
+    try:
+        append_private_event({
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": "checkpoint_phone_normalization_migrated",
+            "from_format": 2,
+            "to_format": 3,
+            "legacy_row_count": len(migrated["legacy_rows_format2"]),
+            "active_row_count": len(migrated["rows"]),
+            "disposition_counts": dict(dispositions),
+        })
+        return True
+    except OSError:
+        # The authoritative checkpoint already contains a complete migration
+        # receipt. Never report a failed migration that might be blindly replayed.
+        return False
+
+
 def migrate_checkpoint_source_identity(checkpoint: dict[str, Any], rows: list[dict[str, Any]], crm: CRM) -> tuple[int, int]:
     """Migrate v1 checkpoint keys/markers after exact legacy lineage verification."""
-    if checkpoint.get("format") == 2 and checkpoint.get("source_identity_scheme") == "fixed_source_ordinal_v1":
+    if checkpoint.get("format") in (2, 3) and checkpoint.get("source_identity_scheme") == "fixed_source_ordinal_v1":
         return 0, 0
     if checkpoint.get("format") != 1 or not isinstance(checkpoint.get("rows"), dict):
         raise ImportFailure("legacy_checkpoint_format_unsupported")
@@ -454,9 +702,14 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="maximum new Contacts; zero means the fixed eligible set")
     parser.add_argument("--rollback", action="store_true", help="reverse only this import's marked created Contacts")
     parser.add_argument("--migrate-source-identities", action="store_true", help="migrate legacy private checkpoint keys and exact matching CRM markers")
+    parser.add_argument("--migrate-phone-normalization", action="store_true",
+                        help="reconcile format-2 rows and create a version-3 private checkpoint; does not import Contacts")
     args = parser.parse_args()
     if args.limit < 0:
         print(json.dumps({"error": "limit_must_be_nonnegative"}))
+        return 2
+    if args.migrate_phone_normalization and (args.rollback or args.migrate_source_identities or args.limit):
+        print(json.dumps({"error": "phone_normalization_migration_options_conflict"}))
         return 2
     try:
         module = load_quality_module()
@@ -464,18 +717,48 @@ def main() -> int:
         if mapping.get("import_authorization") != "bounded first import to selected local EspoCRM explicitly assigned by qitem-20261108184715-500ad3de; no external writes":
             raise ImportFailure("bounded_import_authorization_missing")
         rows = source_records(module, mapping)
-        if CHECKPOINT_PATH.exists():
+        checkpoint_exists = CHECKPOINT_PATH.exists()
+        if checkpoint_exists:
             if stat.S_IMODE(CHECKPOINT_PATH.stat().st_mode) & 0o077:
                 raise ImportFailure("checkpoint_permissions_too_open")
             checkpoint = json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
         else:
-            checkpoint = {"format": 2, "source_identity_scheme": "fixed_source_ordinal_v1",
+            checkpoint = {"format": 3, "source_identity_scheme": "fixed_source_ordinal_v1",
                           "mapping_version": mapping["mapping_version"],
                           "phone_normalization_version": module.PHONE_NORMALIZATION_VERSION, "rows": {}}
         if checkpoint.get("mapping_version") != mapping["mapping_version"] or not isinstance(checkpoint.get("rows"), dict):
             raise ImportFailure("checkpoint_mapping_version_mismatch")
+        if args.migrate_phone_normalization:
+            if not checkpoint_exists:
+                raise ImportFailure("legacy_phone_normalization_checkpoint_missing")
+            crm = CRM()
+            _, user = crm.call("GET", "/App/user")
+            if user.get("user", {}).get("type") != "admin":
+                raise ImportFailure("local_import_identity_not_admin")
+            migrated, migration_counts = migrate_checkpoint_phone_normalization(
+                checkpoint, rows, mapping, crm, module.PHONE_NORMALIZATION_VERSION
+            )
+            if migrated is not checkpoint:
+                event_recorded = persist_phone_checkpoint_migration(checkpoint, migrated, migration_counts)
+            else:
+                event_recorded = True
+            print(json.dumps({
+                "operation": "private_phone_normalization_checkpoint_migration",
+                "checkpoint_format": migrated.get("format"),
+                "phone_normalization_version": migrated.get("phone_normalization_version"),
+                "legacy_rows_preserved": len(migrated.get("legacy_rows_format2", {})),
+                "active_checkpoint_rows": len(migrated.get("rows", {})),
+                "migration_dispositions": dict(migration_counts),
+                "migration_event_recorded": event_recorded,
+                "contacts_created": 0,
+                "owner_sources_changed": False,
+                "crm_contact_writes": False,
+            }, separators=(",", ":")))
+            return 0
         if checkpoint.get("phone_normalization_version") != module.PHONE_NORMALIZATION_VERSION:
             raise ImportFailure("phone_normalization_checkpoint_reconciliation_required")
+        if checkpoint.get("format") != 3:
+            raise ImportFailure("checkpoint_phone_normalization_migration_required")
         crm = CRM()
         _, user = crm.call("GET", "/App/user")
         if user.get("user", {}).get("type") != "admin":
@@ -488,7 +771,7 @@ def main() -> int:
                               "owner_sources_changed": False,
                               "external_writes": False}, separators=(",", ":")))
             return 0
-        if checkpoint.get("format") != 2 or checkpoint.get("source_identity_scheme") != "fixed_source_ordinal_v1":
+        if checkpoint.get("format") != 3 or checkpoint.get("source_identity_scheme") != "fixed_source_ordinal_v1":
             raise ImportFailure("checkpoint_source_identity_migration_required")
         if args.rollback:
             rollback_counts, conflict = rollback_created(checkpoint, rows, crm)
