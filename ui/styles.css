@@ -1213,10 +1213,10 @@ dialog>h2 {
 .campaign-detail .detail-provenance>button {display:block;margin-top:8px;}
 @media(max-width:800px) {.campaign-card{padding:19px}.campaign-card h2{font-size:18px}.fixture-notice{padding:16px}.campaign-facts{padding:13px}.campaign-facts dl{grid-template-columns:1fr;gap:7px}.campaign-facts dd{margin-bottom:9px}.email-preview-frame{height:760px}.preview-switch button{padding:9px 11px;font-size:11px}}
 
-/* Long task/campaign titles must leave the footer and scrollable detail reachable. */
-dialog[open]:has(.campaign-detail,.native-observation) {display:flex;flex-direction:column;}
-dialog:has(.campaign-detail,.native-observation)>.dialog-header,dialog:has(.campaign-detail,.native-observation)>h2,dialog:has(.campaign-detail,.native-observation)>.dialog-footer {flex-shrink:0;}
-dialog:has(.campaign-detail,.native-observation)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
+/* Long client/task/campaign titles must leave the footer and scrollable detail reachable. */
+dialog[open]:has(.campaign-detail,.detail-grid) {display:flex;flex-direction:column;}
+dialog:has(.campaign-detail,.detail-grid)>.dialog-header,dialog:has(.campaign-detail,.detail-grid)>h2,dialog:has(.campaign-detail,.detail-grid)>.dialog-footer {flex-shrink:0;}
+dialog:has(.campaign-detail,.detail-grid)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
 
 .native-observation {border-top:1px solid var(--line);padding-top:22px;margin-top:25px;overflow-wrap:anywhere;}
 .observation-controls {display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:16px 0;}

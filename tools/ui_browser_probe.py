@@ -57,6 +57,7 @@ def synthetic_native():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true')
+    parser.add_argument('--organization-detail',action='store_true',help='Focused synthetic populated Organization detail proof; no live sources or screenshots')
     parser.add_argument('--native-observations', action='store_true', help='Targeted native-observation UI checks; no CRM')
     parser.add_argument('--native-work-root',type=Path,help='With native-observations: existing native specification root, no screenshots')
     parser.add_argument('--native-original-id',help='With native-work-root: existing original task in the selected board slice')
@@ -68,6 +69,8 @@ def main():
         parser.error('native-work-root requires native-observations and native-original-id; screenshots forbidden')
     if args.native_original_id and not args.native_work_root:
         parser.error('native-original-id requires native-work-root')
+    if args.organization_detail and (args.live or args.native_observations or args.native_work_root or args.crm_credential_file or args.proof_dir):
+        parser.error('organization-detail is isolated synthetic-only and forbids credential files/screenshots')
     sensitive_live=bool(args.live or args.native_work_root)
     if args.native_observations and args.live:
         parser.error('native-observations is synthetic-only')
@@ -80,6 +83,9 @@ def main():
     if args.native_observations:
         from native_observation_ui_fixture import ObservationNative, NoCRM
         native,crm=(NativeWork(args.native_work_root,MISSION) if args.native_work_root else ObservationNative()),NoCRM()
+    if args.organization_detail:
+        from organization_detail_ui_fixture import OrganizationFixture, EmptyNative
+        crm,native=OrganizationFixture(),EmptyNative()
     token = secrets.token_urlsafe(32)
     auth = Auth(grants=[{'subject':'ephemeral-browser-diagnostic','role':'user','projects':['opentour'],
                         'tokenSha256':hashlib.sha256(token.encode()).hexdigest()}])
@@ -89,7 +95,7 @@ def main():
         service=ObservationService(crm,native)
     server = make_server(service,auth,0,data_mode='live' if sensitive_live else 'synthetic')
     thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-    mode='live-native' if args.native_work_root else 'native-synthetic' if args.native_observations else 'live' if args.live else 'synthetic'
+    mode='organization-synthetic' if args.organization_detail else 'live-native' if args.native_work_root else 'native-synthetic' if args.native_observations else 'live' if args.live else 'synthetic'
     session_result = subprocess.run(['agent-browser','session','id','--scope','worktree','--prefix','opentour-ui-'+mode],capture_output=True,text=True,timeout=10)
     session = session_result.stdout.strip()
     if session_result.returncode or not session:
@@ -121,6 +127,9 @@ def main():
             run('scrollintoview',selector)
             run('click',selector)
         try:
+            if args.organization_detail:
+                from organization_detail_ui_fixture import exercise
+                return exercise(run,evaluate,wait,check,click,crm,token,server.server_port,checks)
             if args.native_observations:
                 from native_observation_ui_fixture import exercise, exercise_live
                 exercise_mode=exercise_live if args.native_work_root else exercise
