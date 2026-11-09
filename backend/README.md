@@ -61,3 +61,6 @@ python3 tools/backend_read_probe.py
 The tests use synthetic in-memory source adapters and a real local HTTP server. The probe uses real native work with an ephemeral in-memory diagnostic grant; without a CRM key it explicitly reports CRM integration NOT RUN. With an authorized runtime reference, run `python3 tools/backend_read_probe.py --crm-credential-file /absolute/private/espo-read-api.json` for real CRM list/detail/filter/search reads. It prints only HTTP statuses, counts and boolean provenance observations. It never prints record values, source markers, tokens or credentials; its server is shut down at the end. A passing probe is not a manager conversation/human-decision acceptance.
 
 EspoCRM query fields and paging follow the vendor [search parameter contract](https://docs.espocrm.com/development/api-search-params/) and [CRUD API](https://docs.espocrm.com/development/api/crud/). Local behavior must still be checked against the installed CRM.
+
+
+Read-only native action observation metadata is available for a known scoped original task through the existing board authorization. See [NATIVE_OBSERVATIONS.md](NATIVE_OBSERVATIONS.md) for the fixed route, source bounds, privacy projection and explicit unconfirmed identity/action semantics. This does not enable native writes or turn an audit entry into an accepted human decision.

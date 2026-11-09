@@ -211,6 +211,14 @@ class Service:
             raise Failure('client_not_found', 404)
         return client_card(parts[1], self.crm.detail(parts[1], parts[2]), self.crm.base)
 
+    def native_decisions(self, work_id, original_id):
+        from .native_observations import observe
+        prefix = 'work:' + PROJECT + ':' + MISSION + ':'
+        if (not work_id.startswith(prefix) or self.native.project != PROJECT
+                or self.native.mission != MISSION):
+            raise Failure('work_not_found', 404)
+        return observe(self.native, work_id[len(prefix):], original_id)
+
     def board(self):
         # Serialize snapshots so slower earlier reads cannot obtain a newer cursor.
         with self.lock:

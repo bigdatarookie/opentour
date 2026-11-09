@@ -102,6 +102,9 @@ def make_server(service, auth, port=18083, data_mode='live'):
                     data = service.clients(params)
                 elif path.startswith('/api/clients/') and not params:
                     data = service.client(path[len('/api/clients/'):])
+                elif path.startswith('/api/board/') and '/native-decisions/' in path and not params:
+                    work_id, original_id = path[len('/api/board/'):].split('/native-decisions/', 1)
+                    data = service.native_decisions(work_id, original_id)
                 elif path in ('/api/board',) or path.startswith('/api/board/'):
                     if params:
                         raise Failure('unknown_query_parameter', 400)
