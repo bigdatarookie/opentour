@@ -16,9 +16,9 @@
     <nav aria-label="Основная навигация">
       <button class="nav-item active" data-view="tasks" aria-current="page"><span aria-hidden="true">▦</span>Задачи<span class="nav-count" id="nav-work-count">—</span></button>
       <button class="nav-item" data-view="clients"><span aria-hidden="true">♧</span>Клиенты</button>
-      <button class="nav-item" disabled aria-describedby="campaign-note"><span aria-hidden="true">↗</span>Кампании<span class="soon">скоро</span></button>
+      <button class="nav-item" data-view="campaigns" aria-describedby="campaign-note"><span aria-hidden="true">↗</span>Кампании<span class="soon">FIXTURE</span></button>
     </nav>
-    <p class="nav-note" id="campaign-note">Раздел кампаний ещё не подключён.</p>
+    <p class="nav-note" id="campaign-note">Локальный предпросмотр. Отправки нет.</p>
     <div class="sidebar-bottom"><span class="small-orbit" aria-hidden="true">◉</span><div><strong>Локальный OpenTour</strong><span>Только просмотр</span></div></div>
   </aside>
 
@@ -51,6 +51,12 @@
           <div id="clients-notice" class="notice" hidden></div><div id="client-list" class="client-list" aria-busy="false"></div>
           <div class="pagination"><span id="page-range" class="update-label"></span><div><button id="previous-page" class="secondary-button" disabled>← Назад</button><button id="next-page" class="secondary-button" disabled>Далее →</button></div></div>
           <p class="view-footnote">Данные читаются из CRM. Неизвестные сведения не дополняются автоматически.</p>
+        </section>
+        <section id="campaigns-view" hidden aria-label="Предпросмотр кампании">
+          <div class="fixture-notice"><strong>FIXTURE · PREVIEW-ONLY</strong><span>NOT CONTENT-APPROVED · NOT SENT</span><p>Локальный пакет для просмотра. Это не запись сервиса рассылок, не утверждённое предложение и не отправленная кампания.</p></div>
+          <div class="section-toolbar"><div class="toolbar-title">Материалы кампании</div><span class="source-tag">Источник: локальные артефакты r01</span></div>
+          <div id="campaign-list" class="campaign-list" aria-busy="false"></div>
+          <p class="view-footnote">Аудитория не выбрана. Получатели, отправитель и сервис рассылок не настроены. Просмотр ничего не отправляет.</p>
         </section>
       </div>
     </main>
