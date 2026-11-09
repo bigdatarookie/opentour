@@ -31,6 +31,19 @@ All images show the visible synthetic-data banner and `.invalid` example contact
 - [Client list, desktop](clients-desktop.png)
 - [Task board, mobile viewport](tasks-mobile.png)
 
+## Focused contrast repair after independent review
+
+Code QA returned four informative text selectors below 4.5:1. `python3 tools/ui_contrast_check.py` reproduced the failure before the repair and passes afterward. Only four CSS foreground declarations were darkened; no layout, JavaScript, API or authorization changed. The check covers declared foreground/background pairs in the current CSS, including client-row hover and the actual transparent empty-column canvas. It is not a general cascade analyzer or full accessibility audit.
+
+| Text | New foreground | Measured ratio |
+| --- | --- | --- |
+| Task result | `#586b55` | 5.75:1 on white |
+| Client contact | `#52664d` | 6.24:1 on white; 5.88:1 on hover |
+| Client type | `#5b6e52` | 5.53:1 on white; 5.21:1 on hover |
+| Empty-column message | `#64715a` | 4.78:1 on the `#f5f6f2` canvas |
+
+Existing screenshots above document the initial candidate before this contrast repair; they were not silently replaced. Functional and live-data checks were not repeated for a foreground-color-only change. This repair is returned for the affected independent re-review and does not broaden the scoped acceptance.
+
 ## Limits
 
 No manager identity, authenticated-human browser acceptance, dialogue/history, reply/decision/resume, real live status transition, populated real organization detail or campaign section is accepted. This first UI does not implement the complete collapse/expand transition animation. Synthetic refresh demonstrates read-state preservation only. All mutation endpoints remain denied by the existing backend. No new external account/API credential, native controller, writable tracker, CRM import/write, campaign send or deployment was introduced. Overall slice acceptance is not claimed. Run and access prerequisites: [UI README](../README.md).
