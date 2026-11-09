@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>OpenTour — рабочее пространство</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">К содержимому</a>
+  <aside class="sidebar" aria-label="Рабочее пространство">
+    <a class="brand" href="#tasks" aria-label="OpenTour — задачи"><span class="brand-mark" aria-hidden="true">↗</span>OpenTour<span class="brand-dot">.</span></a>
+    <p class="workspace-label">РАБОЧЕЕ ПРОСТРАНСТВО</p>
+    <nav aria-label="Основная навигация">
+      <button class="nav-item active" data-view="tasks" aria-current="page"><span aria-hidden="true">▦</span>Задачи<span class="nav-count" id="nav-work-count">—</span></button>
+      <button class="nav-item" data-view="clients"><span aria-hidden="true">♧</span>Клиенты</button>
+      <button class="nav-item" disabled aria-describedby="campaign-note"><span aria-hidden="true">↗</span>Кампании<span class="soon">скоро</span></button>
+    </nav>
+    <p class="nav-note" id="campaign-note">Раздел кампаний ещё не подключён.</p>
+    <div class="sidebar-bottom"><span class="small-orbit" aria-hidden="true">◉</span><div><strong>Локальный OpenTour</strong><span>Только просмотр</span></div></div>
+  </aside>
+
+  <div class="shell">
+    <header class="topbar"><div class="breadcrumb">OpenTour <span>/</span> Информационный слой</div><div class="top-actions"><span class="read-badge"><i aria-hidden="true"></i>Только чтение</span><button class="text-button" id="disconnect" hidden>Отключиться</button></div></header>
+    <div id="synthetic-banner" class="synthetic-banner" hidden>ДЕМОНСТРАЦИЯ · Синтетические данные для проверки интерфейса</div>
+    <main id="main" tabindex="-1">
+      <section class="connect-panel" id="connect-panel" aria-labelledby="connect-title">
+        <span class="eyebrow">ДОСТУП К ПРОЕКТУ</span><h1 id="connect-title">Всё важное —<br>в одном пространстве.</h1>
+        <p>Задачи команды и клиентская база. Просмотр текущих данных без изменения записей.</p>
+        <form id="connect-form"><label for="access-token">Ранее выданный ключ чтения OpenTour</label><div class="connect-input"><input id="access-token" type="password" autocomplete="off" spellcheck="false" maxlength="1024" required aria-describedby="access-help"><button class="primary-button" id="connect-button" type="submit">Открыть пространство <span aria-hidden="true">→</span></button></div></form>
+        <p class="field-hint" id="access-help">Ключ остаётся в памяти этой вкладки. Не вводите пароль или API-ключ CRM. Получить новый доступ через этот экран нельзя.</p>
+        <p id="connect-status" role="status" class="connection-status"></p>
+      </section>
+
+      <div id="workspace" hidden>
+        <section class="page-heading"><div><div class="eyebrow" id="page-eyebrow">ОБЩАЯ ДОСКА</div><h1 id="page-title">Работа команды</h1><p id="page-description">Текущий план, результаты и следующие шаги.</p></div><button id="refresh" class="secondary-button"><span aria-hidden="true">↻</span> Обновить</button></section>
+        <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+
+        <section id="tasks-view" aria-label="Доска задач">
+          <div class="mission-banner"><div class="mission-symbol" aria-hidden="true">↗</div><div><span class="eyebrow">ТЕКУЩЕЕ НАПРАВЛЕНИЕ</span><h2>От клиентской базы к готовой кампании</h2><p>Клиенты, работа команды и материалы в одном процессе.</p></div><span class="source-tag">Источник: OpenRig</span></div>
+          <div class="section-toolbar"><div class="toolbar-title">Задачи <span id="work-total" class="count-pill">—</span></div><div class="filters"><label class="sr-only" for="work-filter">Этап задач</label><select id="work-filter"><option value="all">Все этапы</option><option value="planned">Запланировано</option><option value="in_progress">В работе</option><option value="needs_human">Требуется человек</option><option value="review">На проверке</option><option value="done">Выполнено</option><option value="unknown">Неизвестно</option></select><span class="update-label" id="board-updated">Ожидаем данные</span></div></div>
+          <div id="board-notice" class="notice" hidden></div><div id="board" class="board" aria-busy="false" tabindex="0" aria-label="Колонки задач"></div>
+          <p class="view-footnote">Этапы следуют за работой команды. Перетаскивание и изменение задач недоступны.</p>
+        </section>
+
+        <section id="clients-view" hidden aria-label="Клиентская база">
+          <form id="client-filters" class="client-filters"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="client-search">Поиск клиентов</label><input id="client-search" type="search" placeholder="Имя, организация, email или телефон" autocomplete="off" maxlength="200"></div><label class="sr-only" for="client-kind">Тип клиента</label><select id="client-kind"><option value="all">Все клиенты</option><option value="person">Физические лица</option><option value="organization">Организации</option></select><label class="sr-only" for="client-channel">Наличие контактов</label><select id="client-channel"><option value="any">Любые контакты</option><option value="email">Есть email</option><option value="phone">Есть телефон</option><option value="none">Нет контактов</option></select></form>
+          <div class="section-toolbar"><div class="toolbar-title">Клиентская база <span id="client-total" class="count-pill">—</span></div><span class="source-tag">Источник: CRM</span></div>
+          <div id="clients-notice" class="notice" hidden></div><div id="client-list" class="client-list" aria-busy="false"></div>
+          <div class="pagination"><span id="page-range" class="update-label"></span><div><button id="previous-page" class="secondary-button" disabled>← Назад</button><button id="next-page" class="secondary-button" disabled>Далее →</button></div></div>
+          <p class="view-footnote">Данные читаются из CRM. Неизвестные сведения не дополняются автоматически.</p>
+        </section>
+      </div>
+    </main>
+    <footer>OpenTour <span>·</span> Рабочее пространство туристической команды</footer>
+  </div>
+
+  <dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-header"><span id="detail-eyebrow" class="eyebrow">ПОДРОБНОСТИ</span><button id="close-detail" class="icon-button" aria-label="Закрыть подробности">✕</button></div><h2 id="detail-title">Подробности</h2><div id="detail-body" class="detail-body"></div><div class="dialog-footer"><span>Режим просмотра</span><button id="done-detail" class="secondary-button">Закрыть</button></div></dialog>
+</body>
+</html>
