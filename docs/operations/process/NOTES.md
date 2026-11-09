@@ -49,3 +49,6 @@
 ## opentour-20261110-actions-runner-container-boundary
 
 The first Actions candidate run (42695487444) failed before tests: the pinned official Python slim image has no `git`, and the job-container checkout provided source files without repository metadata. The failure was in checked-out-HEAD verification, not in the test suite. The corrected lane verifies `git rev-parse HEAD` on the Ubuntu runner and executes only the shared Python unittest command inside the digest-pinned official Python container with the checkout mounted read-only, a private temporary filesystem, and no network. The candidate SHA and actual Actions result will be recorded after the corrected run; no host test run or external data access was used.
+
+
+The next Actions attempt (42696105598) reached all 101 tests; two rollback tests failed because `append_private_event` writes through the repository's hard-coded private directory even though test checkpoint/event files are temporary. The CI container now maps that path to a fresh per-run directory under `RUNNER_TEMP`, runs with the runner UID, keeps the source checkout read-only, and gives tests only an ephemeral `/tmp`. No owner-private host path or data is mounted. The test result after this isolation change is pending.

@@ -64,12 +64,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           docker run --rm --pull=always --network=none python:3.12.16-slim-bookworm@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4 python3 --version
 
+      - name: Prepare isolated private test directory
+        shell: sh
+        run: mkdir -m 700 -p "$RUNNER_TEMP/opentour-private"
+
       - name: Run shared test command
         id: unit-tests
         shell: sh
         run: |
           set +e
-          docker run --rm --pull=always --network=none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --env PYTHONDONTWRITEBYTECODE=1 --volume "$GITHUB_WORKSPACE:/workspace:ro" --workdir /workspace python:3.12.16-slim-bookworm@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4 python3 -m unittest discover -s tests -p "test_*.py" -v > "$RUNNER_TEMP/opentour-unittest.log" 2>&1
+          docker run --rm --pull=always --network=none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 --env HOME=/tmp --env PYTHONDONTWRITEBYTECODE=1 --user "$(id -u):$(id -g)" --volume "$GITHUB_WORKSPACE:/workspace:ro" --volume "$RUNNER_TEMP/opentour-private:/Users/garry/.openrig/topology/rigs/opentour-rig/seats/data-engineer/private-contact-import:rw" --workdir /workspace python:3.12.16-slim-bookworm@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4 python3 -m unittest discover -s tests -p "test_*.py" -v > "$RUNNER_TEMP/opentour-unittest.log" 2>&1
           status=$?
           cat "$RUNNER_TEMP/opentour-unittest.log"
           printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
