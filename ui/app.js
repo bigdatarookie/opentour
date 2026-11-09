@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
-  trigger: null, poll: null, debounce: null };
+  trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0 };
 const roles = {developer:'Разработка',devops:'Инфраструктура','qa-code':'Проверка кода','qa-system':'Проверка системы',
   engineer:'Данные',creative:'Креатив',designer:'Дизайн',operator:'Оператор',lead:'Координация'};
 const columnLabels = {planned:'Запланировано',in_progress:'В работе',needs_human:'Требуется человек',review:'На проверке',done:'Выполнено',unknown:'Неизвестно'};
@@ -62,10 +62,12 @@ function loadingBoard() {
 function resetSession(message='') {
   state.session++; state.token=''; state.board=null; state.etag=null; state.clients=null;
   state.clientRequest++; state.modalRequest++; state.boardBusy=false; state.modal=null;
+  state.campaignRequest++;state.campaigns=null;
   state.trigger=null;state.offset=0;state.nextOffset=null;
   clearInterval(state.poll); clearTimeout(state.debounce);
   if ($('detail-dialog').open) $('detail-dialog').close();
   $('board').replaceChildren(); $('client-list').replaceChildren(); $('detail-body').replaceChildren();
+  $('campaign-list').replaceChildren();
   $('detail-title').textContent='Подробности';$('client-search').value='';$('client-kind').value='all';$('client-channel').value='any';
   $('work-filter').value='all';$('work-total').textContent='—';$('nav-work-count').textContent='—';$('client-total').textContent='—';
   $('workspace').hidden=true; $('connect-panel').hidden=false; $('disconnect').hidden=true;
@@ -99,15 +101,16 @@ function showView(view) {
     const active=el.dataset.view === view; el.classList.toggle('active',active);
     if (active) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');
   }
-  $('tasks-view').hidden=view !== 'tasks'; $('clients-view').hidden=view !== 'clients';
-  $('page-title').textContent=view === 'tasks' ? 'Работа команды' : 'Клиенты';
-  $('page-eyebrow').textContent=view === 'tasks' ? 'ОБЩАЯ ДОСКА' : 'КЛИЕНТСКАЯ БАЗА';
-  $('page-description').textContent=view === 'tasks' ? 'Текущий план, результаты и следующие шаги.' : 'Физические лица и организации. Данные из вашей CRM.';
+  $('tasks-view').hidden=view !== 'tasks'; $('clients-view').hidden=view !== 'clients';$('campaigns-view').hidden=view !== 'campaigns';
+  $('page-title').textContent=({tasks:'Работа команды',clients:'Клиенты',campaigns:'Кампании'})[view];
+  $('page-eyebrow').textContent=({tasks:'ОБЩАЯ ДОСКА',clients:'КЛИЕНТСКАЯ БАЗА',campaigns:'ЛОКАЛЬНЫЙ ПРЕДПРОСМОТР'})[view];
+  $('page-description').textContent=({tasks:'Текущий план, результаты и следующие шаги.',clients:'Физические лица и организации. Данные из вашей CRM.',campaigns:'Один пакет, все материалы и условия — без отправки.'})[view];
   if (state.token && view === 'clients' && !state.clients) loadClients();
+  if (state.token && view === 'campaigns' && !state.campaigns) loadCampaigns();
 }
 for (const el of document.querySelectorAll('[data-view]')) el.addEventListener('click', () => showView(el.dataset.view));
 document.querySelector('.brand').addEventListener('click',(event) => {event.preventDefault();showView('tasks');});
-$('refresh').addEventListener('click', () => state.view === 'tasks' ? loadBoard() : loadClients());
+$('refresh').addEventListener('click', () => state.view === 'tasks' ? loadBoard() : state.view === 'clients' ? loadClients() : loadCampaigns());
 $('work-filter').addEventListener('change', () => renderBoard());
 
 function ownerLabel(owner) { return roles[owner?.role] || (owner?.kind === 'human_request' ? 'Требуется человек' : 'Команда'); }
@@ -185,6 +188,33 @@ function clientParams() {
   return query;
 }
 function clientName(item) { return item.displayName || (item.kind === 'organization' ? 'Название не указано' : 'Имя не указано'); }
+function fixtureLabels(labels) {
+  const row=node('div','fixture-labels');for (const label of labels) row.append(node('span','',label));return row;
+}
+async function loadCampaigns() {
+  if (!state.token) return;
+  const request=++state.campaignRequest,session=state.session;
+  $('campaign-list').setAttribute('aria-busy','true');$('campaign-list').replaceChildren(node('div','skeleton'));
+  try {
+    const {data}=await api('/api/campaigns');
+    if (session !== state.session || request !== state.campaignRequest) return;
+    if (data.mode !== 'FIXTURE') throw new Error('unsupported_campaign_mode');
+    state.campaigns=data;
+    const content=document.createDocumentFragment();
+    for (const item of data.items) {
+      if (item.mode !== 'FIXTURE') throw new Error('unsupported_campaign_mode');
+      const card=button('',() => openDetails('campaign',item.id,card),'campaign-card');card.dataset.objectId=item.id;
+      card.append(node('span','task-kind','EMAIL · ЛОКАЛЬНЫЙ ПАКЕТ r01'),node('h2','',item.title),fixtureLabels(item.labels));
+      card.append(node('p','','Аудитория не выбрана · число получателей недоступно'),node('span','source-link','Открыть предпросмотр →'));content.append(card);
+    }
+    if (!data.items.length) content.append(stateBox('Локальных пакетов нет','Сервис рассылок не подключён. Это не результат проверки провайдера.'));
+    $('campaign-list').replaceChildren(content);
+  } catch(error) {
+    if (session !== state.session || request !== state.campaignRequest) return;
+    if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
+    state.campaigns=null;$('campaign-list').replaceChildren(stateBox('Пакет недоступен','Локальные материалы не удалось проверить. Данные сервиса рассылок не запрашивались.',() => loadCampaigns(),'↻'));
+  } finally {if (session === state.session && request === state.campaignRequest) $('campaign-list').setAttribute('aria-busy','false');}
+}
 function renderClients() {
   const data=state.clients;
   const fragment=document.createDocumentFragment();
@@ -235,8 +265,9 @@ function metadata(items) {
 function renderDetailError(text) {$('detail-body').replaceChildren(stateBox('Не удалось открыть',text,() => loadDetail(),'↻'));}
 function renderDetail(kind,item) {
   const scroll=$('detail-body').scrollTop;
-  $('detail-title').textContent=kind === 'work' ? item.title : clientName(item);
-  $('detail-eyebrow').textContent=kind === 'work' ? 'РАБОТА КОМАНДЫ · OPENRIG' : 'КАРТОЧКА КЛИЕНТА · CRM';
+  $('detail-title').textContent=kind === 'work' || kind === 'campaign' ? item.title : clientName(item);
+  $('detail-eyebrow').textContent=kind === 'work' ? 'РАБОТА КОМАНДЫ · OPENRIG' : kind === 'campaign' ? 'КАМПАНИЯ · FIXTURE · PREVIEW-ONLY' : 'КАРТОЧКА КЛИЕНТА · CRM';
+  if (kind === 'campaign') {renderCampaignDetail(item);return;}
   const grid=node('div','detail-grid'),main=node('div'),side=node('aside','detail-side');
   if (kind === 'work') {
     main.append(detailSection('Текущий контекст',item.currentContext),detailSection('Последний результат',item.lastResult),detailSection('Следующий шаг',item.requiredNextAction));
@@ -268,6 +299,39 @@ function renderDetail(kind,item) {
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
 }
+function renderCampaignDetail(item) {
+  if (item.mode !== 'FIXTURE') {renderDetailError('Режим материала не подтверждён.');return;}
+  const root=node('div','campaign-detail');root.append(fixtureLabels(item.labels));
+  const facts=node('div','campaign-facts');facts.append(metadata([['Канал','Email · предпросмотр'],['Аудитория','Не выбрана · число получателей недоступно'],['Отправитель','Не настроен'],['Сервис рассылок','Не подключён · provider ID отсутствует']]));root.append(facts);
+  const tabs=node('div','preview-switch');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','Формат материала');
+  const preview=node('div','email-preview-panel');
+  const frame=node('iframe','email-preview-frame');frame.title='Предпросмотр письма — FIXTURE, не утверждено и не отправлено';frame.setAttribute('sandbox','');frame.setAttribute('referrerpolicy','no-referrer');frame.srcdoc=item.previewDocument;preview.append(frame);
+  const text=node('pre','campaign-source',item.plainText);text.hidden=true;
+  const manifest=node('div','campaign-manifest');manifest.hidden=true;
+  manifest.append(node('p','detail-note','Исходный манифест r01 сохранён без изменений. Описания прежнего состояния приложения — исторические, а не текущий статус интеграции.'),node('pre','campaign-source',item.manifest));
+  const views=[['HTML-предпросмотр',preview],['Текст письма',text],['Исходный манифест',manifest]];
+  for (const [label,panel] of views) {
+    const tab=button(label,() => {for(const [_,other] of views) other.hidden=other !== panel;for(const sibling of tabs.children) sibling.setAttribute('aria-pressed',String(sibling === tab));},'secondary-button');
+    tab.setAttribute('aria-pressed',String(panel === preview));tabs.append(tab);
+  }
+  root.append(tabs,preview,text,manifest);
+  const caveats=node('section','detail-section');caveats.append(node('h3','','Ограничения и источники'));
+  for (const caveat of item.caveats) caveats.append(node('p','',caveat));
+  for (const source of item.sourceLinks) {
+    if (!['https://www.delfin-tour.ru/promo/5443.html','https://www.delfin-tour.ru/tours/24676.html'].includes(source.url)) continue;
+    const link=node('a','source-link',source.title+' ↗');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';caveats.append(link);
+  }
+  const materials=node('details','detail-provenance');materials.append(node('summary','','Исходные материалы r01 (только чтение)'));
+  for (const material of item.materials) {
+    const show=button(material.name,async () => {
+      try {const {data}=await api('/api/campaigns/'+encodeURIComponent(item.id)+'/materials/'+encodeURIComponent(material.name));
+        if (state.modal?.id !== item.id) return;
+        const raw=node('pre','campaign-source',data.content);materials.append(raw);show.disabled=true;
+      } catch {if(state.modal?.id===item.id) materials.append(node('p','','Материал недоступен.'));}
+    },'text-button');materials.append(show);
+  }
+  caveats.append(materials);root.append(caveats);$('detail-body').replaceChildren(root);
+}
 function openDetails(kind,id,trigger) {
   state.modal={kind,id,version:null};state.trigger=trigger;
   $('detail-title').textContent='Подробности';$('detail-body').replaceChildren(node('div','skeleton'),node('p','loading-label','Загружаем подробности…'));
@@ -277,7 +341,7 @@ async function loadDetail() {
   if (!state.modal) return;
   const request=++state.modalRequest,session=state.session,{kind,id}=state.modal;
   try {
-    const {data}=await api((kind === 'work' ? '/api/board/' : '/api/clients/')+encodeURIComponent(id));
+    const {data}=await api((kind === 'work' ? '/api/board/' : kind === 'campaign' ? '/api/campaigns/' : '/api/clients/')+encodeURIComponent(id));
     if (request !== state.modalRequest || session !== state.session || state.modal?.id !== id) return;
     renderDetail(kind,data);
   } catch(error) {

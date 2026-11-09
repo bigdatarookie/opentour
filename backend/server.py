@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .adapters import EspoCRM, Failure, NativeWork
 from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
+from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
 
 
 class Server(ThreadingHTTPServer):
@@ -27,9 +28,10 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/styles.css': ('styles.css', 'text/css; charset=utf-8')}
 
 
-def make_server(service, auth, port=18083, data_mode='live'):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
+    campaign = campaign or FixtureCampaign()
     class Handler(BaseHTTPRequestHandler):
         server_version = 'OpenTourLocal'
 
@@ -51,15 +53,18 @@ def make_server(service, auth, port=18083, data_mode='live'):
             self.wfile.write(raw)
 
         def ui_file(self, path):
-            filename, content_type = UI_FILES[path]
-            raw = (STATIC / filename).read_bytes()
+            if path == '/ui/campaign-email.css':
+                raw, content_type = campaign.stylesheet(), 'text/css; charset=utf-8'
+            else:
+                filename, content_type = UI_FILES[path]
+                raw = (STATIC / filename).read_bytes()
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
-            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             self.send_header('Connection', 'close')
             self.end_headers()
             self.wfile.write(raw)
@@ -76,7 +81,7 @@ def make_server(service, auth, port=18083, data_mode='live'):
                 if url.scheme or url.netloc or len(self.path) > 4096:
                     raise Failure('invalid_request', 400)
                 path = urllib.parse.unquote(url.path)
-                if self.command == 'GET' and path in UI_FILES and not url.query:
+                if self.command == 'GET' and (path in UI_FILES or path == '/ui/campaign-email.css') and not url.query:
                     # Public shell has no embedded data, tokens, source URLs or private files.
                     return self.ui_file(path)
                 if self.command == 'GET' and path == '/healthz':
@@ -93,7 +98,7 @@ def make_server(service, auth, port=18083, data_mode='live'):
                     raise Failure('project_forbidden', 403)
                 params.pop('project', None)
                 if path == '/api/capabilities' and not params:
-                    data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board'], 'dataMode': data_mode,
+                    data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board', 'campaigns'], 'dataMode': data_mode,
                             'writes': {'enabled': False, 'reason': WRITE_LIMITATION},
                             'dialogue': {'enabled': False, 'reason': WRITE_LIMITATION}}
                 elif path == '/api/clients':
@@ -102,6 +107,12 @@ def make_server(service, auth, port=18083, data_mode='live'):
                     data = service.clients(params)
                 elif path.startswith('/api/clients/') and not params:
                     data = service.client(path[len('/api/clients/'):])
+                elif path == '/api/campaigns' and not params:
+                    data = campaign.list()
+                elif path == '/api/campaigns/' + CAMPAIGN_ID and not params:
+                    data = campaign.detail(CAMPAIGN_ID)
+                elif path.startswith('/api/campaigns/' + CAMPAIGN_ID + '/materials/') and not params:
+                    data = campaign.material(path.split('/materials/', 1)[1])
                 elif path in ('/api/board',) or path.startswith('/api/board/'):
                     if params:
                         raise Failure('unknown_query_parameter', 400)
