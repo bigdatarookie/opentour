@@ -49,6 +49,10 @@ class Principal:
     subject: str
     role: str
     projects: tuple
+    board_read: bool = False
+    board_respond: bool = False
+    board_create: bool = False
+    board_tasks: tuple = ()
 
 
 class Auth:
@@ -78,7 +82,15 @@ class Auth:
                     raise Failure('invalid_read_grant', 403)
                 if PROJECT not in g['projects']:
                     raise Failure('project_forbidden', 403)
-                return Principal(g['subject'], g['role'], tuple(g['projects']))
+                board = g.get('board', {})
+                if (not isinstance(board, dict) or set(board) - {'read', 'respond', 'create', 'tasks'}
+                        or any(type(board.get(k, False)) is not bool for k in ('read', 'respond', 'create'))
+                        or not isinstance(board.get('tasks', []), list)
+                        or len(board.get('tasks', [])) > 1000
+                        or any(not isinstance(t, str) or len(t) > 128 for t in board.get('tasks', []))):
+                    raise Failure('invalid_board_grant', 403)
+                return Principal(g['subject'], g['role'], tuple(g['projects']), board.get('read', False),
+                                 board.get('respond', False), board.get('create', False), tuple(board.get('tasks', [])))
         raise Failure('authentication_required', 401)
 
 

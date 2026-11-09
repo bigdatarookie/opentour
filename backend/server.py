@@ -1,4 +1,4 @@
-"""Run with python3 -m backend.server. Loopback, authenticated reads only."""
+"""Run with python3 -m backend.server. Loopback, scoped application conversations and source reads."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +10,7 @@ from pathlib import Path
 from .adapters import EspoCRM, Failure, NativeWork
 from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
 from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
+from .board_store import BoardStore
 
 
 class Server(ThreadingHTTPServer):
@@ -28,7 +29,7 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/styles.css': ('styles.css', 'text/css; charset=utf-8')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
     campaign = campaign or FixtureCampaign()
@@ -87,9 +88,6 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None):
                 if self.command == 'GET' and path == '/healthz':
                     return self.respond(200, {'status': 'ok', 'service': 'opentour-read-backend', 'integrationReady': False})
                 principal = auth.authorize(self.headers.get('Authorization'))
-                if self.command != 'GET':
-                    # No native mutation is reachable, even with an administrator grant.
-                    raise Failure(WRITE_LIMITATION, 403)
                 query = urllib.parse.parse_qs(url.query, keep_blank_values=True, max_num_fields=12)
                 if any(len(v) != 1 for v in query.values()):
                     raise Failure('duplicate_query_parameter', 400)
@@ -97,10 +95,40 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None):
                 if params.get('project', PROJECT) != PROJECT:
                     raise Failure('project_forbidden', 403)
                 params.pop('project', None)
-                if path == '/api/capabilities' and not params:
+                if path == '/api/board-tasks' or path.startswith('/api/board-tasks/'):
+                    if not board_store:
+                        raise Failure('board_store_not_configured', 503)
+                    if params:
+                        raise Failure('unknown_query_parameter', 400)
+                    parts = path[len('/api/board-tasks'):].strip('/').split('/') if path != '/api/board-tasks' else []
+                    if self.command == 'GET' and len(parts) <= 1:
+                        data = board_store.detail(principal, parts[0]) if parts else board_store.list(principal)
+                    elif self.command == 'POST' and (not parts or len(parts) == 2 and parts[1] == 'messages'):
+                        if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
+                            raise Failure('content_length_required', 411)
+                        raw_length = self.headers.get('Content-Length', '')
+                        if not raw_length.isdigit() or not 0 < int(raw_length) <= 32768:
+                            raise Failure('request_body_too_large', 413)
+                        if self.headers.get('Content-Type') != 'application/json':
+                            raise Failure('json_required', 415)
+                        raw = self.rfile.read(int(raw_length))
+                        if len(raw) != int(raw_length):
+                            raise Failure('incomplete_body', 400)
+                        body = json.loads(raw)
+                        data = board_store.append(principal, parts[0], body) if parts else board_store.create(principal, body)
+                        return self.respond(200, data)
+                    else:
+                        raise Failure('board_route_forbidden', 403)
+                elif self.command != 'GET':
+                    # Only OpenTour conversation writes are exposed; native decisions remain closed.
+                    raise Failure(WRITE_LIMITATION, 403)
+                elif path == '/api/capabilities' and not params:
                     data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board', 'campaigns'], 'dataMode': data_mode,
-                            'writes': {'enabled': False, 'reason': WRITE_LIMITATION},
-                            'dialogue': {'enabled': False, 'reason': WRITE_LIMITATION}}
+                            'writes': {'enabled': False, 'scope': 'native_actions', 'reason': WRITE_LIMITATION},
+                            'dialogue': {'enabled': False, 'reason': WRITE_LIMITATION},
+                            'boardConversations': {'read': bool(board_store and principal.board_read),
+                                'respond': bool(board_store and principal.board_read and principal.board_respond),
+                                'create': bool(board_store and principal.board_read and principal.board_create and principal.role == 'administrator' and '*' in principal.board_tasks)}}
                 elif path == '/api/clients':
                     if set(params) - {'kind', 'q', 'offset', 'limit', 'hasEmail', 'hasPhone'}:
                         raise Failure('unknown_query_parameter', 400)
@@ -154,12 +182,14 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=18083)
-    parser.add_argument('--auth-file', type=Path, required=True, help='Private hashed read grants; never creates a human')
+    parser.add_argument('--auth-file', type=Path, required=True, help='Private hashed project grants; board permissions are explicit, never native human identity')
     parser.add_argument('--crm-credential-file', type=Path, help='Private JSON containing read-only EspoCRM API key')
+    parser.add_argument('--board-db', type=Path, default=Path.home() / '.local/share/opentour/board/board.sqlite3',
+                        help='Private OpenTour application DB outside checkout/.artifacts')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(root / 'opentour-rig', MISSION))
-    with make_server(service, Auth(args.auth_file), args.port) as server:
+    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db)) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()
 
