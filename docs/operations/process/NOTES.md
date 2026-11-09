@@ -52,3 +52,7 @@ The first Actions candidate run (42695487444) failed before tests: the pinned of
 
 
 The next Actions attempt (42696105598) reached all 101 tests; two rollback tests failed because `append_private_event` writes through the repository's hard-coded private directory even though test checkpoint/event files are temporary. The CI container now maps that path to a fresh per-run directory under `RUNNER_TEMP`, runs with the runner UID, keeps the source checkout read-only, and gives tests only an ephemeral `/tmp`. No owner-private host path or data is mounted. The test result after this isolation change is pending.
+
+## opentour-20261110-ci-isolated-candidate-pass
+
+The corrected PR candidate at `a1361ae80d0eaadcec255815c57b50bb63fee972` passed GitHub Actions pull_request run [42696583879](https://github.com/bigdatarookie/opentour/actions/runs/42696583879): runner `git rev-parse HEAD` matched the expected candidate SHA; the pinned Python 3.12.16 container ran the shared command and reported 101 tests, OK (8.824s). The container was read-only except for ephemeral `/tmp` and a unique per-run private-state directory; network was disabled. This verifies the CI candidate only; product PR run remains pending workflow merge.
