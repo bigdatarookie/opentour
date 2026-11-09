@@ -176,7 +176,8 @@ class CRM:
                 if field == "emailAddress":
                     matches = any(value.strip().casefold() == key_value.casefold() for value in values)
                 else:
-                    matches = any(value.strip() == key_value.strip() for value in values)
+                    accepted_phone_forms = {raw_value.strip(), key_value.strip()}
+                    matches = any(value.strip() in accepted_phone_forms for value in values)
                 if matches:
                     found[obj["id"]] = obj
         return list(found.values())
@@ -222,6 +223,9 @@ def source_records(module, mapping: dict[str, Any]):
                 "workbook_alias": item.get("workbook_alias"), "sheet_alias": item.get("sheet_alias"),
                 "source_name": filename, "disposition": None, "reason": None,
                 "email_raw": None, "email_key": None, "phone_raw": None, "phone_key": None,
+                "normalized_phone": None, "assumed_calling_code": None,
+                "phone_normalization_status": "missing", "phone_normalization_reason": "phone_missing",
+                "phone_normalization_version": module.PHONE_NORMALIZATION_VERSION,
                 "last_name": None, "surname_status": None,
             }
             if not row or all(not value.strip() for value in row):
@@ -232,11 +236,22 @@ def source_records(module, mapping: dict[str, Any]):
                 email_raw = row[email_i] if email_i is not None else ""
                 phone_raw = row[phone_i] if phone_i is not None else ""
                 email_key = module.parse_email(email_raw) if email_i is not None else None
-                phone_key = module.parse_phone(phone_raw) if phone_i is not None else None
+                phone_result = module.normalize_phone(phone_raw) if phone_i is not None else module.normalize_phone("")
+                phone_key = phone_result["normalized_phone"]
                 record.update(email_raw=email_raw if email_key else None, email_key=email_key,
-                              phone_raw=phone_raw if phone_key else None, phone_key=phone_key)
+                              phone_raw=phone_raw if phone_raw.strip() else None, phone_key=phone_key,
+                              normalized_phone=phone_key,
+                              assumed_calling_code=phone_result["assumed_calling_code"],
+                              phone_normalization_status=phone_result["status"],
+                              phone_normalization_reason=phone_result["reason"],
+                              phone_normalization_version=phone_result["normalization_version"])
                 if not email_key and not phone_key:
-                    record.update(disposition="excluded", reason="no_usable_channel")
+                    if phone_result["status"] == "invalid":
+                        record.update(disposition="excluded", reason="invalid_phone_number")
+                    elif phone_result["status"] == "ambiguous":
+                        record.update(disposition="excluded", reason="ambiguous_phone_number")
+                    else:
+                        record.update(disposition="excluded", reason="no_usable_channel")
                 else:
                     surname_value = row[last_i] if last_i is not None else None
                     last_name, surname_status = resolve_surname(module, item, surname_value)
@@ -250,12 +265,21 @@ def source_records(module, mapping: dict[str, Any]):
                         channel_groups[("phone", phone_key)].add(ref)
             all_rows.append(record)
     collided: set[tuple[int, int]] = set()
-    for refs in channel_groups.values():
+    phone_collided: set[tuple[int, int]] = set()
+    for (channel, _), refs in channel_groups.items():
         if len(refs) > 1:
             collided.update(refs)
+            if channel == "phone":
+                phone_collided.update(refs)
     for row in all_rows:
         if row["disposition"] == "candidate" and (row["source_ordinal"], row["logical_row"]) in collided:
-            row.update(disposition="excluded", reason="ambiguous_source_channel_collision")
+            ref = (row["source_ordinal"], row["logical_row"])
+            if ref in phone_collided:
+                row.update(disposition="excluded", reason="normalization_collision",
+                           phone_normalization_status="collision",
+                           phone_normalization_reason="multiple_source_rows_share_normalized_phone")
+            else:
+                row.update(disposition="excluded", reason="ambiguous_source_email_collision")
     return all_rows
 
 
@@ -289,6 +313,15 @@ def resolve_surname(module, source: dict[str, Any], value: str | None) -> tuple[
     return last_name, status
 
 
+def build_contact_body(row: dict[str, Any]) -> dict[str, Any]:
+    body: dict[str, Any] = {"lastName": row["last_name"], "description": contact_marker(row)}
+    if row.get("email_raw") is not None:
+        body["emailAddress"] = row["email_raw"]
+    if row.get("normalized_phone") is not None:
+        body["phoneNumber"] = row["normalized_phone"]
+    return body
+
+
 def append_disposition(checkpoint: dict[str, Any], row: dict[str, Any], disposition: str,
                        reason: str, contact_id: str | None = None) -> None:
     ref = source_reference(row)
@@ -296,10 +329,15 @@ def append_disposition(checkpoint: dict[str, Any], row: dict[str, Any], disposit
              "source_revision": row["source_revision"], "mapping_version": row["mapping_version"],
              "workbook_alias": row["workbook_alias"], "sheet_alias": row["sheet_alias"],
              "disposition": disposition, "reason": reason, "surname_status": row["surname_status"]}
+    for key in ("normalized_phone", "assumed_calling_code", "phone_normalization_status",
+                "phone_normalization_reason", "phone_normalization_version"):
+        if row.get(key) is not None:
+            entry[key] = row[key]
     if contact_id:
         entry["crm_contact_id"] = contact_id
     checkpoint["rows"][ref] = entry
-    append_private_event({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **entry})
+    safe_event = {key: value for key, value in entry.items() if key != "normalized_phone"}
+    append_private_event({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **safe_event})
     atomic_private_json(CHECKPOINT_PATH, checkpoint)
 
 
@@ -431,9 +469,13 @@ def main() -> int:
                 raise ImportFailure("checkpoint_permissions_too_open")
             checkpoint = json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
         else:
-            checkpoint = {"format": 2, "source_identity_scheme": "fixed_source_ordinal_v1", "mapping_version": mapping["mapping_version"], "rows": {}}
+            checkpoint = {"format": 2, "source_identity_scheme": "fixed_source_ordinal_v1",
+                          "mapping_version": mapping["mapping_version"],
+                          "phone_normalization_version": module.PHONE_NORMALIZATION_VERSION, "rows": {}}
         if checkpoint.get("mapping_version") != mapping["mapping_version"] or not isinstance(checkpoint.get("rows"), dict):
             raise ImportFailure("checkpoint_mapping_version_mismatch")
+        if checkpoint.get("phone_normalization_version") != module.PHONE_NORMALIZATION_VERSION:
+            raise ImportFailure("phone_normalization_checkpoint_reconciliation_required")
         crm = CRM()
         _, user = crm.call("GET", "/App/user")
         if user.get("user", {}).get("type") != "admin":
@@ -496,11 +538,7 @@ def main() -> int:
                 counts["unique_existing_contact_preserved"] += 1
                 continue
 
-            body: dict[str, Any] = {"lastName": row["last_name"], "description": contact_marker(row)}
-            if row["email_raw"] is not None:
-                body["emailAddress"] = row["email_raw"]
-            if row["phone_raw"] is not None:
-                body["phoneNumber"] = row["phone_raw"]
+            body = build_contact_body(row)
             try:
                 _, created = crm.call("POST", "/Contact", body)
                 contact_id = created.get("id")
@@ -513,7 +551,7 @@ def main() -> int:
                     raise ImportFailure("created_contact_surname_verification_failed")
                 if row["email_raw"] is not None and verified.get("emailAddress", "").strip().casefold() != row["email_key"]:
                     raise ImportFailure("created_contact_email_verification_failed")
-                if row["phone_raw"] is not None and verified.get("phoneNumber", "").strip() != row["phone_key"].strip():
+                if row["normalized_phone"] is not None and verified.get("phoneNumber", "").strip() != row["normalized_phone"].strip():
                     raise ImportFailure("created_contact_phone_verification_failed")
                 append_disposition(checkpoint, row, "created", "created_and_verified", contact_id)
                 created_this_run += 1
