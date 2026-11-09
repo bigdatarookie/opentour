@@ -1186,3 +1186,34 @@ dialog>h2 {
     scroll-behavior:auto!important;
   }
 }
+.fixture-notice {
+  border:1px solid #d8bd89;
+  background:#fff5df;
+  color:#725325;
+  border-radius:10px;
+  padding:18px 22px;
+  margin-bottom:24px;
+}
+.fixture-notice strong,.fixture-notice>span {display:block;font-size:12px;letter-spacing:.6px;}
+.fixture-notice p {font-size:12px;margin:10px 0 0;max-width:700px;}
+.fixture-labels {display:flex;flex-wrap:wrap;gap:7px;margin:14px 0;}
+.fixture-labels span {border:1px solid #d5be8c;background:#fff5df;color:#725325;border-radius:5px;padding:4px 8px;font-size:10px;font-weight:600;}
+.campaign-card {display:block;width:100%;text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;}
+.campaign-card h2 {margin:0 0 12px;font-size:21px;}
+.campaign-card>p {font-size:12px;color:#52664d;margin:16px 0 0;}
+.campaign-facts {padding:16px 20px;background:#eff3e9;border-radius:8px;margin-bottom:20px;}
+.campaign-facts dl {display:grid;grid-template-columns:1fr 2fr;gap:10px 20px;}
+.campaign-facts dt,.campaign-facts dd {margin:0;font-size:11px;}
+.preview-switch {display:flex;flex-wrap:wrap;gap:8px;margin:15px 0;}
+.preview-switch [aria-pressed="true"] {background:#224e43;color:white;border-color:#224e43;}
+.email-preview-frame {width:100%;height:720px;border:1px solid #d8e0d2;border-radius:8px;background:#f5f6f2;}
+.campaign-source {white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;background:#f1f4eb;color:#2f4d35;border:1px solid #dbe3d2;border-radius:8px;padding:18px;max-width:100%;}
+.campaign-detail>.detail-section {margin-top:25px;}
+.campaign-detail .source-link {margin-right:20px;}
+.campaign-detail .detail-provenance>button {display:block;margin-top:8px;}
+@media(max-width:800px) {.campaign-card{padding:19px}.campaign-card h2{font-size:18px}.fixture-notice{padding:16px}.campaign-facts{padding:13px}.campaign-facts dl{grid-template-columns:1fr;gap:7px}.campaign-facts dd{margin-bottom:9px}.email-preview-frame{height:760px}.preview-switch button{padding:9px 11px;font-size:11px}}
+
+/* Long campaign titles must leave the footer and scrollable preview reachable. */
+dialog[open]:has(.campaign-detail) {display:flex;flex-direction:column;}
+dialog:has(.campaign-detail)>.dialog-header,dialog:has(.campaign-detail)>h2,dialog:has(.campaign-detail)>.dialog-footer {flex-shrink:0;}
+dialog:has(.campaign-detail)>.detail-body {flex:1 1 auto;min-height:0;max-height:none;}
