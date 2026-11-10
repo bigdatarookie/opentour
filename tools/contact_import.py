@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import fcntl
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import io
@@ -79,6 +81,12 @@ def atomic_private_json(path: Path, doc: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         os.replace(name, path)
         os.chmod(path, 0o600)
+        # Persist the renamed entry before any subsequent remote create intent.
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         try:
             os.unlink(name)
@@ -699,6 +707,217 @@ def rollback_created(checkpoint: dict[str, Any], rows: list[dict[str, Any]], crm
     return counts, conflict
 
 
+# A separate opt-in lane: historical terminal rows are never reopened in-place.
+CONFLICT_REASON = "destination_conflict_without_channel_match"
+RESUME_STATES = {"intent", "returned", "unknown", "created", "create_reconciled", "existing",
+                 "ambiguous", "read_failed", "conflict", "validation_rejected", "verification_failed"}
+
+
+def mapping_digest(mapping: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(mapping, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def read_conflict_selection(path: Path) -> dict[str, Any]:
+    if not path.absolute().parent.resolve().is_relative_to(PRIVATE_DIR.resolve()):
+        raise ImportFailure("conflict_selection_outside_private_boundary")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        mode = os.fstat(stream.fileno()).st_mode
+        if not stat.S_ISREG(mode) or stat.S_IMODE(mode) & 0o077:
+            raise ImportFailure("conflict_selection_not_private_regular_file")
+        return json.load(stream)
+
+
+@contextmanager
+def private_import_lock():
+    """All CLI lanes share custody of the checkpoint across remote effects."""
+    CHECKPOINT_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if stat.S_IMODE(CHECKPOINT_PATH.parent.stat().st_mode) & 0o077:
+        raise ImportFailure("import_checkpoint_directory_not_private")
+    path = CHECKPOINT_PATH.with_suffix(".lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode) or stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
+            raise ImportFailure("import_lock_not_private_regular_file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ImportFailure("import_checkpoint_in_use") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def validate_conflict_selection(checkpoint, rows, mapping, normalizer_version, selection, limit):
+    if type(limit) is not int or limit < 1:
+        raise ImportFailure("conflict_resume_requires_positive_limit")
+    if (checkpoint.get("format") != 3 or checkpoint.get("source_identity_scheme") != "fixed_source_ordinal_v1"
+            or checkpoint.get("mapping_version") != mapping.get("mapping_version")
+            or checkpoint.get("phone_normalization_version") != normalizer_version):
+        raise ImportFailure("conflict_checkpoint_lineage_mismatch")
+    if (not isinstance(selection, dict) or set(selection) != {"format", "mapping_version", "mapping_sha256",
+            "phone_normalization_version", "source_references"} or selection.get("format") != 1
+            or selection.get("mapping_version") != mapping.get("mapping_version")
+            or selection.get("mapping_sha256") != mapping_digest(mapping)
+            or selection.get("phone_normalization_version") != normalizer_version):
+        raise ImportFailure("conflict_selection_lineage_mismatch")
+    refs = selection["source_references"]
+    if (not isinstance(refs, list) or not refs or any(not isinstance(ref, str) for ref in refs)
+            or len(set(refs)) != len(refs)):
+        raise ImportFailure("conflict_selection_references_invalid")
+    by_ref = {source_reference(row): row for row in rows}
+    if len(by_ref) != len(rows):
+        raise ImportFailure("conflict_source_reference_collision")
+    ledger = checkpoint.get("conflict_resume", {"format": 1, "mapping_sha256": mapping_digest(mapping), "rows": {}})
+    if (not isinstance(ledger, dict) or ledger.get("format") != 1
+            or ledger.get("mapping_sha256") != mapping_digest(mapping) or not isinstance(ledger.get("rows"), dict)):
+        raise ImportFailure("conflict_resume_history_invalid")
+    for ref in refs:
+        row, old = by_ref.get(ref), checkpoint.get("rows", {}).get(ref)
+        if (not row or not isinstance(old, dict) or old.get("disposition") != "excluded"
+                or old.get("reason") != CONFLICT_REASON or row.get("disposition") != "candidate"
+                or not (row.get("email_key") or row.get("phone_key"))):
+            raise ImportFailure("conflict_reference_not_terminal_candidate")
+        if (source_reference(old) != ref or old.get("source_identity") != source_identity(row)
+                or any(old.get(key) != row.get(key) for key in ("source_ordinal", "logical_row", "source_revision", "mapping_version"))
+                or row.get("mapping_version") != mapping.get("mapping_version")
+                or row.get("phone_normalization_version") != normalizer_version
+                or row.get("phone_key") != row.get("normalized_phone")
+                or any(old.get(key) != row.get(key) for key in checkpoint_phone_metadata(row))):
+            raise ImportFailure("conflict_reference_lineage_mismatch")
+        history = ledger["rows"].get(ref, [])
+        if not isinstance(history, list):
+            raise ImportFailure("conflict_resume_history_invalid")
+        for sequence, event in enumerate(history, 1):
+            if (not isinstance(event, dict) or event.get("sequence") != sequence
+                    or event.get("state") not in RESUME_STATES or event.get("source_reference") != ref):
+                raise ImportFailure("conflict_resume_history_invalid")
+    return [by_ref[ref] for ref in refs[:limit]], ledger
+
+
+def resume_conflicts(checkpoint, rows, mapping, crm, normalizer_version, selection, limit):
+    """Explicit exact-reference recovery. Caller holds private_import_lock.
+
+    The atomic checkpoint contains append-only per-reference receipts. JSONL is
+    a secondary mirror: failed mirror writes halt, never authorize another POST.
+    An intent is durable before the final channel GET and possible POST. Even a
+    crash before POST is conservatively unknown; absence cannot authorize replay.
+    """
+    selected, ledger = validate_conflict_selection(checkpoint, rows, mapping, normalizer_version, selection, limit)
+    counts = Counter()
+    stop_reason = None
+    post_attempts = 0
+
+    def record(row, state, contact_id=None):
+        nonlocal checkpoint
+        ref = source_reference(row)
+        # Also detect writers that do not participate in this CLI's lock.
+        if json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8")) != checkpoint:
+            raise ImportFailure("checkpoint_changed_during_conflict_resume")
+        event = {"sequence": len(ledger["rows"].get(ref, [])) + 1, "state": state,
+                 "source_reference": ref, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        if contact_id:
+            event["crm_contact_id"] = contact_id
+        ledger["rows"].setdefault(ref, []).append(event)
+        checkpoint["conflict_resume"] = ledger
+        atomic_private_json(CHECKPOINT_PATH, checkpoint)
+        # No channel values, IDs or references are returned in public output.
+        append_private_event({"event": "exact_conflict_resume", **event})
+        counts[state] += 1
+
+    def verify(row, contact_id):
+        contact = crm.get_contact(contact_id)
+        if (not contact or contact.get("description") != contact_marker(row)
+                or contact.get("lastName") != row["last_name"]
+                or (row.get("email_key") and str(contact.get("emailAddress", "")).strip().casefold() != row["email_key"])
+                or (row.get("normalized_phone") and str(contact.get("phoneNumber", "")).strip() != row["normalized_phone"])):
+            raise ImportFailure("conflict_created_record_verification_failed")
+        if set(reconcile_row_channels(row, crm)) != {contact_id}:
+            raise ImportFailure("conflict_created_channels_not_unique")
+
+    for row in selected:
+        ref = source_reference(row)
+        history = ledger["rows"].get(ref, [])
+        states = {event["state"] for event in history}
+        if (history and history[-1]["state"] == "intent") or states & {"returned", "unknown", "created", "create_reconciled", "verification_failed"}:
+            # Any prior possible POST permanently removes the create branch.
+            try:
+                matches = reconcile_row_channels(row, crm)
+                ids = [event["crm_contact_id"] for event in history if event.get("crm_contact_id")]
+                contact_id = ids[-1] if ids else next(iter(matches)) if len(matches) == 1 else None
+                if not contact_id:
+                    raise ImportFailure("conflict_prior_effect_unresolved")
+                verify(row, contact_id)
+            except ImportFailure:
+                record(row, "verification_failed")
+                stop_reason = "conflict_prior_effect_requires_review"
+                break
+            record(row, "created" if history[-1]["state"] == "created" else "create_reconciled", contact_id)
+            continue
+        if states & {"conflict", "validation_rejected"}:
+            counts["terminal_rejection_retained"] += 1
+            continue
+        try:
+            matches = reconcile_row_channels(row, crm)
+        except ImportFailure:
+            record(row, "read_failed")
+            continue
+        if states & {"existing"}:
+            # Losing a prior existing match is not permission to create another.
+            if len(matches) == 1 and next(iter(matches)) == next(event["crm_contact_id"] for event in history if event["state"] == "existing"):
+                record(row, "existing", next(iter(matches)))
+            else:
+                record(row, "ambiguous")
+            continue
+        if len(matches) > 1:
+            record(row, "ambiguous")
+            continue
+        if matches:
+            record(row, "existing", next(iter(matches)))
+            continue
+        record(row, "intent")
+        try:
+            # Do not rely on a prior run or even the initial read in this run.
+            matches = reconcile_row_channels(row, crm)
+        except ImportFailure:
+            record(row, "read_failed")
+            continue
+        if matches:
+            record(row, "existing" if len(matches) == 1 else "ambiguous", next(iter(matches)) if len(matches) == 1 else None)
+            continue
+        try:
+            post_attempts += 1
+            status, created = crm.call("POST", "/Contact", build_contact_body(row))
+        except ImportFailure as exc:
+            if exc.code.startswith("crm_http_409"):
+                record(row, "conflict")
+                continue
+            if exc.code.startswith(("crm_http_400", "crm_http_422")):
+                record(row, "validation_rejected")
+                continue
+            record(row, "unknown")
+            stop_reason = "unknown_create_effect_requires_review"
+            break
+        contact_id = created.get("id") if isinstance(created, dict) else None
+        if status not in (200, 201) or not isinstance(contact_id, str) or not contact_id:
+            record(row, "unknown")
+            stop_reason = "unknown_create_effect_requires_review"
+            break
+        record(row, "returned", contact_id)
+        try:
+            verify(row, contact_id)
+        except ImportFailure:
+            record(row, "verification_failed", contact_id)
+            stop_reason = "created_record_requires_review"
+            break
+        record(row, "created", contact_id)
+    return {"operation": "exact_reference_conflict_resume", "selected": len(selected),
+            "not_attempted_due_to_limit": max(0, len(selection["source_references"]) - len(selected)),
+            "aggregate_results": dict(counts), "post_attempts": post_attempts, "stopped_for_review": stop_reason,
+            "historical_rows_preserved": True, "owner_sources_changed": False}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=0, help="maximum new Contacts; zero means the fixed eligible set")
@@ -706,6 +925,7 @@ def main() -> int:
     parser.add_argument("--migrate-source-identities", action="store_true", help="migrate legacy private checkpoint keys and exact matching CRM markers")
     parser.add_argument("--migrate-phone-normalization", action="store_true",
                         help="reconcile format-2 rows and create a version-3 private checkpoint; does not import Contacts")
+    parser.add_argument("--resume-conflicts-file", type=Path, help="private exact-reference selection; requires positive --limit; no historical rows are reset")
     args = parser.parse_args()
     if args.limit < 0:
         print(json.dumps({"error": "limit_must_be_nonnegative"}))
@@ -713,6 +933,18 @@ def main() -> int:
     if args.migrate_phone_normalization and (args.rollback or args.migrate_source_identities or args.limit):
         print(json.dumps({"error": "phone_normalization_migration_options_conflict"}))
         return 2
+    if args.resume_conflicts_file and (args.limit < 1 or args.rollback or args.migrate_source_identities or args.migrate_phone_normalization):
+        print(json.dumps({"error": "conflict_resume_options_invalid"}))
+        return 2
+    try:
+        with private_import_lock():
+            return run_import(args)
+    except (ImportFailure, OSError) as exc:
+        print(json.dumps({"error": exc.code if isinstance(exc, ImportFailure) else "private_import_lock_unavailable"}))
+        return 2
+
+
+def run_import(args) -> int:
     try:
         module = load_quality_module()
         mapping = module.require_private_mapping(MAPPING_PATH)
@@ -761,6 +993,14 @@ def main() -> int:
             raise ImportFailure("phone_normalization_checkpoint_reconciliation_required")
         if checkpoint.get("format") != 3:
             raise ImportFailure("checkpoint_phone_normalization_migration_required")
+        selection = None
+        if args.resume_conflicts_file:
+            if not checkpoint_exists:
+                raise ImportFailure("conflict_checkpoint_missing")
+            if CHECKPOINT_PATH.is_symlink():
+                raise ImportFailure("conflict_checkpoint_not_regular_private_file")
+            selection = read_conflict_selection(args.resume_conflicts_file)
+            validate_conflict_selection(checkpoint, rows, mapping, module.PHONE_NORMALIZATION_VERSION, selection, args.limit)
         crm = CRM()
         _, user = crm.call("GET", "/App/user")
         if user.get("user", {}).get("type") != "admin":
@@ -775,6 +1015,10 @@ def main() -> int:
             return 0
         if checkpoint.get("format") != 3 or checkpoint.get("source_identity_scheme") != "fixed_source_ordinal_v1":
             raise ImportFailure("checkpoint_source_identity_migration_required")
+        if selection is not None:
+            summary = resume_conflicts(checkpoint, rows, mapping, crm, module.PHONE_NORMALIZATION_VERSION, selection, args.limit)
+            print(json.dumps(summary, separators=(",", ":")))
+            return 1 if summary["stopped_for_review"] else 0
         if args.rollback:
             rollback_counts, conflict = rollback_created(checkpoint, rows, crm)
             print(json.dumps({"operation": "bounded_private_import_rollback",
