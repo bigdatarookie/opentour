@@ -1,31 +1,7 @@
-<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>OpenTour — рабочее пространство</title>
-  <link rel="stylesheet" href="/ui/styles.css">
-  <script src="/ui/app.js" defer></script>
-</head>
-<body>
-  <a class="skip-link" href="#main">К содержимому</a>
-  <aside class="sidebar" aria-label="Рабочее пространство">
-    <a class="brand" href="#tasks" aria-label="OpenTour — задачи"><span class="brand-mark" aria-hidden="true">↗</span>OpenTour<span class="brand-dot">.</span></a>
-    <p class="workspace-label">РАБОЧЕЕ ПРОСТРАНСТВО</p>
-    <nav aria-label="Основная навигация">
-      <button class="nav-item active" data-view="tasks" aria-current="page"><span aria-hidden="true">▦</span>Задачи<span class="nav-count" id="nav-work-count">—</span></button>
-      <button class="nav-item" data-view="clients"><span aria-hidden="true">♧</span>Клиенты</button>
-      <button class="nav-item" data-view="campaigns" aria-describedby="campaign-note"><span aria-hidden="true">↗</span>Кампании<span class="soon">FIXTURE</span></button>
-    </nav>
-    <p class="nav-note" id="campaign-note">Локальный предпросмотр. Отправки нет.</p>
-    <div class="sidebar-bottom"><span class="small-orbit" aria-hidden="true">◉</span><div><strong>Локальный OpenTour</strong><span>Доступ к проекту</span></div></div>
-  </aside>
-
-  <div class="shell">
-    <header class="topbar"><div class="breadcrumb">OpenTour <span>/</span> Информационный слой</div><div class="top-actions"><span class="read-badge" id="access-mode"><i aria-hidden="true"></i>Только чтение</span><button class="text-button" id="disconnect" hidden>Отключиться</button></div></header>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>OpenTour &mdash; Atlas</title><link rel="stylesheet" href="/ui/styles.css"><script src="/ui/app.js" defer></script></head><body>
+<a class="skip-link" href="#main">К содержимому</a>
+<header class="masthead" id="masthead"><div class="topline"><a class="brand" href="#tasks" aria-label="OpenTour — задачи">OpenTour<span>АТЛАС</span></a><div class="top-actions"><span class="role-label" id="session-role"></span><span class="read-badge" id="access-mode"><i aria-hidden="true"></i>Только чтение</span><button class="text-button" id="disconnect" hidden>Отключиться</button></div></div><div class="navline"><nav aria-label="Разделы"><button data-view="tasks" aria-current="page">Задачи <span id="nav-work-count">&mdash;</span></button><button data-view="clients">Клиенты <span id="nav-client-count">&mdash;</span></button><button data-view="campaigns">Кампании <span id="nav-campaign-count">&mdash;</span></button></nav><button id="dialog-toggle" aria-expanded="false" aria-controls="conversation" disabled>Свернуть диалог <span aria-hidden="true">→</span></button></div></header>
     <div id="synthetic-banner" class="synthetic-banner" hidden>ДЕМОНСТРАЦИЯ · Синтетические данные для проверки интерфейса</div>
-    <main id="main" tabindex="-1">
       <section class="connect-panel" id="connect-panel" aria-labelledby="connect-title">
         <span class="eyebrow">ДОСТУП К ПРОЕКТУ</span><h1 id="connect-title">Всё важное —<br>в одном пространстве.</h1>
         <p>Задачи команды и клиентская база. Данные проекта и доступные обсуждения задач.</p>
@@ -34,8 +10,8 @@
         <p id="connect-status" role="status" class="connection-status"></p>
       </section>
 
-      <div id="workspace" hidden>
-        <section class="page-heading"><div><div class="eyebrow" id="page-eyebrow">ОБЩАЯ ДОСКА</div><h1 id="page-title">Работа команды</h1><p id="page-description">Текущий план, результаты и следующие шаги.</p></div><button id="refresh" class="secondary-button"><span aria-hidden="true">↻</span> Обновить</button></section>
+
+<div id="workspace" class="workspace" hidden><main id="main" tabindex="-1">        <div class="page-heading" id="page-heading"><div><div class="eyebrow" id="page-eyebrow">ОБЩАЯ ДОСКА</div><h1 id="page-title">Работа команды</h1><p id="page-description">Текущий план, результаты и следующие шаги.</p></div><button id="refresh" class="secondary-button"><span aria-hidden="true">↻</span> Обновить</button></div>
         <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
 
         <section id="tasks-view" aria-label="Доска задач">
@@ -47,10 +23,10 @@
         </section>
 
         <section id="clients-view" hidden aria-label="Клиентская база">
-          <form id="client-filters" class="client-filters"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="client-search">Поиск клиентов</label><input id="client-search" type="search" placeholder="Имя, организация, email или телефон" autocomplete="off" maxlength="200"></div><label class="sr-only" for="client-kind">Тип клиента</label><select id="client-kind"><option value="all">Все клиенты</option><option value="person">Физические лица</option><option value="organization">Организации</option></select><label class="sr-only" for="client-channel">Наличие контактов</label><select id="client-channel"><option value="any">Любые контакты</option><option value="email">Есть email</option><option value="phone">Есть телефон</option><option value="none">Нет контактов</option></select></form>
-          <div class="section-toolbar"><div class="toolbar-title">Клиентская база <span id="client-total" class="count-pill">—</span></div><span class="source-tag">Источник: CRM</span></div>
-          <div id="clients-notice" class="notice" hidden></div><div id="client-list" class="client-list" aria-busy="false"></div>
-          <div class="pagination"><span id="page-range" class="update-label"></span><div><button id="previous-page" class="secondary-button" disabled>← Назад</button><button id="next-page" class="secondary-button" disabled>Далее →</button></div></div>
+          <div class="client-filters-block"><form id="client-filters" class="client-filters"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="client-search">Поиск клиентов</label><input id="client-search" type="search" placeholder="Имя, организация, email или телефон" autocomplete="off" maxlength="200"></div><label class="sr-only" for="client-kind">Тип клиента</label><select id="client-kind"><option value="all">Все клиенты</option><option value="person">Физические лица</option><option value="organization">Организации</option></select><label class="sr-only" for="client-channel">Наличие контактов</label><select id="client-channel"><option value="any">Любые контакты</option><option value="email">Есть email</option><option value="phone">Есть телефон</option><option value="none">Нет контактов</option></select></form></div>
+          <div class="section-toolbar client-base-heading"><div class="toolbar-title">Клиентская база <span id="client-total" class="count-pill">—</span></div><span class="source-tag">Источник: CRM</span></div>
+          <div id="clients-notice" class="notice" hidden></div><div class="client-table-block"><div id="client-list" class="client-list" aria-busy="false"></div>
+          <div class="pagination"><span id="page-range" class="update-label"></span><div><button id="previous-page" class="secondary-button" disabled>← Назад</button><button id="next-page" class="secondary-button" disabled>Далее →</button></div></div></div>
           <p class="view-footnote">Данные читаются из CRM. Неизвестные сведения не дополняются автоматически.</p>
         </section>
         <section id="campaigns-view" hidden aria-label="Предпросмотр кампании">
@@ -59,11 +35,5 @@
           <div id="campaign-list" class="campaign-list" aria-busy="false"></div>
           <p class="view-footnote">Аудитория не выбрана. Получатели, отправитель и сервис рассылок не настроены. Просмотр ничего не отправляет.</p>
         </section>
-      </div>
-    </main>
-    <footer>OpenTour <span>·</span> Рабочее пространство туристической команды</footer>
-  </div>
-
-  <dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-header"><span id="detail-eyebrow" class="eyebrow">ПОДРОБНОСТИ</span><button id="close-detail" class="icon-button" aria-label="Закрыть подробности">✕</button></div><h2 id="detail-title">Подробности</h2><div id="detail-body" class="detail-body"></div><div class="dialog-footer"><span id="detail-mode">Режим просмотра</span><button id="done-detail" class="secondary-button">Закрыть</button></div></dialog>
-</body>
-</html>
+</main><div id="dialog-shade" hidden></div><aside hidden id="conversation" aria-label="Контекстный диалог"><div class="dialog-top"><p class="eyebrow">КОНТЕКСТНЫЙ ДИАЛОГ</p><button id="dialog-close" class="text-button">Закрыть</button></div><div class="agent-heading"><span class="agent-initial" aria-hidden="true">O</span><div><h2 id="agent-name"></h2><p id="agent-object"></p></div></div><p class="dialog-hint" id="dialog-hint"></p><div id="messages" class="messages" role="log" aria-label="История диалога"></div><div id="chat-form"><label for="chat-text">Сообщение <span id="chat-recipient"></span></label><textarea id="chat-text" disabled rows="3" placeholder="Что уточнить у команды?"></textarea><p id="role-explanation">В этой роли можно читать диалог. Ответить команде — через карточку задачи.</p><div class="compose-bottom"><span id="chat-availability"></span><button id="chat-send" disabled class="primary">Отправить</button></div><p id="chat-status" class="form-status" role="status"></p></div></aside></div><footer class="app-footer" id="app-footer"><span id="campaign-note">Локальный предпросмотр. Отправки нет.</span><span>Атлас / рабочее пространство</span></footer>  <dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-header"><span id="detail-eyebrow" class="eyebrow">ПОДРОБНОСТИ</span><button id="close-detail" class="icon-button" aria-label="Закрыть подробности">✕</button></div><h2 id="detail-title">Подробности</h2><div id="detail-body" class="detail-body"></div><div class="dialog-footer"><span id="detail-mode">Режим просмотра</span><button id="done-detail" class="secondary-button">Закрыть</button></div></dialog>
+</body></html>

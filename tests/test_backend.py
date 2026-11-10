@@ -197,7 +197,7 @@ class PublicPathTests(unittest.TestCase):
         self.assertEqual(detail['provenance']['entity'], 'Contact')
 
     def test_ui_shell_and_fixed_assets_are_public_but_data_stays_protected(self):
-        for path, mime in (('/', 'text/html'), ('/ui/app.js','text/javascript'), ('/ui/styles.css','text/css')):
+        for path, mime in (('/', 'text/html'), ('/ui/app.js','text/javascript'), ('/ui/styles.css','text/css'), ('/ui/atlas.css','text/css')):
             with urllib.request.urlopen(self.base + path, timeout=3) as response:
                 raw = response.read().decode()
                 self.assertEqual(response.status, 200)
@@ -206,6 +206,14 @@ class PublicPathTests(unittest.TestCase):
                 self.assertNotIn(TOKEN,raw)
                 self.assertNotIn('synthetic@example.invalid',raw)
                 self.assertNotIn('unsafe-inline',response.headers['Content-Security-Policy'])
+        for name in ('Prata-Regular.ttf', 'Commissioner.ttf'):
+            with urllib.request.urlopen(self.base + '/ui/assets/' + name, timeout=3) as response:
+                self.assertEqual(response.headers['Content-Type'], 'font/ttf')
+                self.assertIn("font-src 'self'", response.headers['Content-Security-Policy'])
+                self.assertGreater(len(response.read()), 1000)
+        # The archived prototype fixture and arbitrary asset paths are never served.
+        self.assertEqual(self.request('/prototypes/opentour-v3/fixture.js')[0],404)
+        self.assertEqual(self.request('/ui/assets/../app.js')[0],404)
         self.assertEqual(self.request('/api/clients',token=None)[0],401)
         self.assertEqual(self.request('/ui/../../backend/server.py')[0],404)
         self.assertEqual(self.request('/ui/secrets.json')[0],404)

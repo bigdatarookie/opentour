@@ -1,0 +1,23 @@
+{
+  "mode": "live",
+  "outcome": "passed",
+  "checks": [
+    "shell_without_data_before_access",
+    "authorized_board_rendered",
+    "mode_label_correct",
+    "work_details_read_only",
+    "escape_restores_task_focus",
+    "clients_rendered",
+    "client_details_and_safe_crm_link",
+    "client_focus_restored",
+    "organization_filter",
+    "empty_search_state",
+    "mobile_no_page_overflow",
+    "mobile_dialog_fits",
+    "token_not_persisted",
+    "disconnect_clears_data"
+  ],
+  "screenshots": "none",
+  "record_values_emitted": false,
+  "credentials_emitted": false
+}

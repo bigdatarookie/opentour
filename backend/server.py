@@ -26,7 +26,10 @@ class Server(ThreadingHTTPServer):
 STATIC = Path(__file__).resolve().parents[1] / 'ui'
 UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/app.js': ('app.js', 'text/javascript; charset=utf-8'),
-            '/ui/styles.css': ('styles.css', 'text/css; charset=utf-8')}
+            '/ui/styles.css': ('styles.css', 'text/css; charset=utf-8'),
+            '/ui/atlas.css': ('atlas.css', 'text/css; charset=utf-8'),
+            '/ui/assets/Prata-Regular.ttf': ('assets/Prata-Regular.ttf', 'font/ttf'),
+            '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
 def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None):
@@ -65,7 +68,7 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
-            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             self.send_header('Connection', 'close')
             self.end_headers()
             self.wfile.write(raw)
@@ -192,9 +195,10 @@ def main():
     parser.add_argument('--crm-credential-file', type=Path, help='Private JSON containing read-only EspoCRM API key')
     parser.add_argument('--board-db', type=Path, default=Path.home() / '.local/share/opentour/board/board.sqlite3',
                         help='Private OpenTour application DB outside checkout/.artifacts')
+    parser.add_argument('--work-root', type=Path, help='Existing registered OpenTour work root for native read projection')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(root / 'opentour-rig', MISSION))
+    service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(args.work_root or root / 'opentour-rig', MISSION))
     with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db)) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()

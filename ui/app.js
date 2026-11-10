@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
   trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0,
-  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map() };
+  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map(), role:null, panelOpen:false, panelTask:null, panelRequest:0, boardRender:0, boardAnimations:[] };
 const roles = {developer:'Разработка',devops:'Инфраструктура','qa-code':'Проверка кода','qa-system':'Проверка системы',
   engineer:'Данные',creative:'Креатив',designer:'Дизайн',operator:'Оператор',lead:'Координация'};
 const columnLabels = {planned:'Запланировано',in_progress:'В работе',needs_human:'Требуется человек',review:'На проверке',done:'Выполнено',unknown:'Неизвестно'};
@@ -62,6 +62,8 @@ function loadingBoard() {
   $('board').replaceChildren(skeleton); $('board').setAttribute('aria-busy','true');
 }
 function resetSession(message='') {
+  cancelBoardMotion();state.panelRequest++;state.panelTask=null;state.role=null;setAtlasPanel(false);$('dialog-toggle').disabled=true;
+  $('messages').replaceChildren();$('agent-object').textContent='';$('session-role').textContent='';
   state.session++; state.token=''; state.board=null; state.etag=null; state.clients=null;
   state.clientRequest++; state.modalRequest++; state.boardBusy=false; state.modal=null;
   state.campaignRequest++;state.campaigns=null;
@@ -74,6 +76,7 @@ function resetSession(message='') {
   $('detail-title').textContent='Подробности';$('client-search').value='';$('client-kind').value='all';$('client-channel').value='any';
   $('work-filter').value='all';$('work-total').textContent='—';$('nav-work-count').textContent='—';$('client-total').textContent='—';
   $('workspace').hidden=true; $('connect-panel').hidden=false; $('disconnect').hidden=true;
+  $('nav-client-count').textContent='—';$('nav-campaign-count').textContent='—';
   $('synthetic-banner').hidden=true; $('connect-status').textContent=message;
   $('access-token').value=''; $('access-token').focus();
 }
@@ -85,12 +88,13 @@ $('connect-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/capabilities').then(({data}) => {
       if (session !== state.session) return;
-      state.boardAccess=data.boardConversations || null;
+      state.boardAccess=data.boardConversations || null;state.role=data.role;
+      $('session-role').textContent=data.role === 'administrator' ? 'Администратор' : 'Пользователь';
       $('access-mode').textContent=state.boardAccess?.respond ? 'Ответы в задачах' : 'Только чтение';
       $('synthetic-banner').hidden=data.dataMode !== 'synthetic';
       $('connect-panel').hidden=true; $('workspace').hidden=false; $('disconnect').hidden=false;
       $('access-token').value=''; $('connect-status').textContent='';
-      showView(state.view); loadBoard();
+      $('dialog-toggle').disabled=false;setAtlasPanel(!matchMedia('(max-width:700px)').matches);showView(state.view);loadBoard();
       clearInterval(state.poll);
       state.poll=setInterval(() => { if (!document.hidden && state.token) loadBoard(true); },15000);
     });
@@ -101,7 +105,12 @@ $('connect-form').addEventListener('submit', async (event) => {
 $('disconnect').addEventListener('click', () => resetSession());
 
 function showView(view) {
+  cancelBoardMotion();state.panelRequest++;state.panelTask=null;
   state.view=view;
+  $('page-heading').hidden=view === 'clients';
+  (view === 'clients' ? document.querySelector('.client-base-heading') : $('page-heading')).append($('refresh'));
+  updateAtlasContext();
+  if(view === 'tasks' && state.board) renderBoard(false);
   for (const el of document.querySelectorAll('[data-view]')) {
     const active=el.dataset.view === view; el.classList.toggle('active',active);
     if (active) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');
@@ -122,33 +131,61 @@ function ownerLabel(owner) { return roles[owner?.role] || (owner?.kind === 'huma
 function restoreCardFocus(id) {
   for (const el of document.querySelectorAll('[data-object-id]')) if (el.dataset.objectId === id) {el.focus({preventScroll:true});return;}
 }
-function renderBoard() {
-  if (!state.board) return;
-  const active=document.activeElement?.dataset?.objectId;
-  const filter=$('work-filter').value;
+function cancelBoardMotion() {
+  state.boardRender++;for(const animation of state.boardAnimations) animation.cancel();state.boardAnimations=[];
+  for(const wrap of $('board').querySelectorAll('.task-wrap')) wrap.inert=false;
+}
+function updateWorkCount() {
+  const native=state.board?.items?.length || 0;
+  $('nav-work-count').textContent=state.board ? native+state.appTasks.length : '—';
+}
+async function renderBoard(motion=true) {
+  if (!state.board || !state.token) return;
+  cancelBoardMotion();const ticket=state.boardRender,session=state.session;
+  const active=document.activeElement?.dataset?.objectId, filter=$('work-filter').value;
   const items=state.board.items;
   const columns=items.length ? state.board.columns.filter(col => (col.id !== 'unknown' || items.some(item => item.column === 'unknown')) && (filter === 'all' || filter === col.id)) : [];
+  const old=new Map([...$('board').querySelectorAll('.task-wrap')].map(wrap=>[wrap.dataset.taskId,wrap]));
+  const moving=items.filter(item=>old.has(item.id) && old.get(item.id).closest('.column')?.dataset.column !== item.column);
+  const animate=motion && state.view==='tasks' && !matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const scroll=$('board').scrollLeft;
+  if(animate) {
+    for(const item of moving) {
+      const wrap=old.get(item.id);wrap.inert=true;
+      state.boardAnimations.push(wrap.animate([{height:wrap.offsetHeight+'px',opacity:1,marginBottom:'13px'},{height:'0px',opacity:0,marginBottom:'0px'}],{duration:130,fill:'forwards',easing:'ease-in'}));
+    }
+    await Promise.all(state.boardAnimations.map(a=>a.finished.catch(()=>{})));
+  }
+  if(ticket!==state.boardRender || session!==state.session || !state.token) return;
+  for(const animation of state.boardAnimations) animation.cancel();state.boardAnimations=[];
   const fragment=document.createDocumentFragment();
-  for (const col of columns) {
-    const section=node('section','column'); section.dataset.column=col.id; section.setAttribute('aria-label',col.label);
-    const cards=items.filter(item => item.column === col.id);
-    const heading=node('h3','column-heading',col.label); heading.append(node('span','column-count',cards.length)); section.append(heading);
-    if (!cards.length) section.append(node('div','column-empty','Работ пока нет'));
-    for (const item of cards) {
-      const card=button('',() => openDetails('work',item.id,card),'task-card'); card.dataset.objectId=item.id;
-      card.append(node('span','task-kind','Работа команды'),node('h3','',item.title),node('p','card-result',item.lastResult || 'Результат пока не зафиксирован'));
-      if (item.blockers?.length) card.append(node('span','blocker','Ожидание · '+(item.blockers[0].requestedAction || 'Нужен следующий шаг')));
-      const label=ownerLabel(item.owners?.[0]);
-      const bottom=node('div','card-bottom'); bottom.append(node('span','avatar',label.slice(0,2).toUpperCase()),node('span','',label),node('span','card-open','↗'));
-      card.append(bottom); section.append(card);
+  for(const col of columns) {
+    const section=node('section','column');section.dataset.column=col.id;section.setAttribute('aria-label',col.label);
+    const cards=items.filter(item=>item.column===col.id);
+    const heading=node('h3','column-heading',col.label);heading.append(node('span','column-count',cards.length));section.append(heading);
+    if(!cards.length) section.append(node('div','column-empty','Работ пока нет'));
+    for(const item of cards) {
+      let wrap=old.get(item.id),card;
+      if(wrap) card=wrap.querySelector('button');
+      else {wrap=node('div','task-wrap');wrap.dataset.taskId=item.id;card=button('',()=>openDetails('work',item.id,card),'task-card');card.dataset.objectId=item.id;wrap.append(card);}
+      wrap.inert=false;card.replaceChildren(node('span','card-context','Работа проекта'));
+      const main=node('span','card-main');
+      main.append(node('span','card-owner',ownerLabel(item.owners?.[0])),node('strong','card-title',item.title),node('span','card-stage',col.label),node('span','card-latest',item.lastResult || 'Результат пока не зафиксирован'));
+      if(item.blockers?.length) main.append(node('span','card-blocker',item.blockers[0].requestedAction || 'Ожидание следующего шага'));
+      card.append(main,node('span','card-footer',item.requiredNextAction || 'Открыть карточку →'));section.append(wrap);
     }
     fragment.append(section);
   }
-  if (!items.length) fragment.append(stateBox('Пока нет задач','Нативная доска не вернула работ для этого проекта.'));
-  if (!columns.length && items.length) fragment.append(stateBox('Нет задач на этом этапе','Выберите другой этап или вернитесь ко всей доске.'));
-  $('board').replaceChildren(fragment); $('board').classList.toggle('has-unknown',columns.length>5);
-  $('board').setAttribute('aria-busy','false'); $('work-total').textContent=items.length; $('nav-work-count').textContent=items.length;
-  if (active && !$('detail-dialog').open) restoreCardFocus(active);
+  if(!items.length) fragment.append(stateBox('Пока нет задач','Для этого проекта нет доступных работ.'));
+  if(!columns.length && items.length) fragment.append(stateBox('Нет задач на этом этапе','Выберите другой этап.'));
+  $('board').replaceChildren(fragment);$('board').scrollLeft=scroll;$('board').classList.toggle('has-unknown',columns.length>5);
+  $('board').setAttribute('aria-busy','false');$('work-total').textContent=items.length;updateWorkCount();
+  if(animate) for(const item of moving) {
+    const wrap=old.get(item.id);if(!wrap.isConnected) continue;
+    const animation=wrap.animate([{height:'0px',opacity:0,marginBottom:'0px'},{height:wrap.offsetHeight+'px',opacity:1,marginBottom:'13px'}],{duration:150,easing:'ease-out'});
+    state.boardAnimations.push(animation);
+  }
+  if(active && !$('detail-dialog').open) restoreCardFocus(active);
 }
 
 async function loadBoard(quiet=false) {
@@ -207,7 +244,7 @@ async function loadCampaigns() {
     const {data}=await api('/api/campaigns');
     if (session !== state.session || request !== state.campaignRequest) return;
     if (data.mode !== 'FIXTURE') throw new Error('unsupported_campaign_mode');
-    state.campaigns=data;
+    state.campaigns=data;$('nav-campaign-count').textContent=data.items.length;
     const content=document.createDocumentFragment();
     for (const item of data.items) {
       if (item.mode !== 'FIXTURE') throw new Error('unsupported_campaign_mode');
@@ -238,6 +275,7 @@ function renderClients() {
       row.append(name,node('span','client-contact',item.email || 'Email не указан'),node('span','client-contact',item.phone || 'Телефон не указан'),node('span','row-arrow','↗'));fragment.append(row);
     }
   }
+  $('nav-client-count').textContent=data.total;
   $('client-list').replaceChildren(fragment);$('client-list').setAttribute('aria-busy','false');$('client-total').textContent=data.total;
   $('page-range').textContent=data.total ? `${state.offset+1}–${state.offset+data.items.length} из ${data.total}` : '0 записей';
   $('previous-page').disabled=state.offset === 0;$('next-page').disabled=data.nextOffset === null;state.nextOffset=data.nextOffset;
@@ -245,6 +283,7 @@ function renderClients() {
 async function loadClients() {
   if (!state.token) return;
   const request=++state.clientRequest,session=state.session;
+  $('nav-client-count').textContent='—';
   $('client-list').setAttribute('aria-busy','true');$('client-total').textContent='—';$('page-range').textContent='Загружаем…';
   $('previous-page').disabled=true;$('next-page').disabled=true;
   const loading=node('div');for(let i=0;i<3;i++) loading.append(node('div','skeleton loading-client'));$('client-list').replaceChildren(loading);
@@ -344,7 +383,9 @@ function renderDetail(kind,item) {
   const scroll=$('detail-body').scrollTop;
   const focused=document.activeElement;
   const observationFocus=focused?.matches('.observation-select') ? '.observation-select' : focused?.matches('.observation-controls button') ? '.observation-controls button' : null;
-  if (kind === 'app') {renderAppTask(item);return;}
+  if (kind === 'app') {state.panelTask=item;updateAtlasContext();renderAppTask(item);return;}
+  state.panelRequest++;state.panelTask=null;
+  updateAtlasContext(kind === 'client' ? clientName(item) : item.title);
   $('detail-title').textContent=kind === 'work' || kind === 'campaign' ? item.title : clientName(item);
   $('detail-eyebrow').textContent=kind === 'work' ? 'РАБОТА КОМАНДЫ · OPENRIG' : kind === 'campaign' ? 'КАМПАНИЯ · FIXTURE · PREVIEW-ONLY' : 'КАРТОЧКА КЛИЕНТА · CRM';
   if (kind === 'campaign') {renderCampaignDetail(item);return;}
@@ -466,6 +507,8 @@ async function loadDetail() {
 for (const id of ['close-detail','done-detail']) $(id).addEventListener('click',() => $('detail-dialog').close());
 $('detail-dialog').addEventListener('click',event => {if(event.target === $('detail-dialog')) {const rect=event.target.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom) event.target.close();}});
 $('detail-dialog').addEventListener('close',() => {
+  // A queued close event can arrive after a fast reopen. Keep the new modal.
+  if ($('detail-dialog').open) return;
   const selected=state.modal?.id;state.modal=null;state.modalRequest++;
   if (state.trigger?.isConnected) state.trigger.focus({preventScroll:true});else if(selected) restoreCardFocus(selected);
   state.trigger=null;
@@ -479,7 +522,7 @@ async function loadAppTasks() {
   try {
     const {data}=await api('/api/board-tasks');
     if (session !== state.session) return;
-    state.appTasks=data.items;
+    state.appTasks=data.items;updateWorkCount();refreshAtlasTask();
     const items=document.createDocumentFragment();
     for (const item of data.items) {
       const card=button('',() => openDetails('app',item.id,card),'task-card');card.dataset.objectId=item.id;
@@ -496,6 +539,8 @@ async function loadAppTasks() {
 }
 const deliveryLabels={pending:'Ожидает доставки агенту',delivered:'Контекст доставлен в очередь агента',failed:'Доставка отклонена до отправки',unknown:'Результат доставки неизвестен — требуется сверка'};
 function renderAppTask(item) {
+  if(state.modal?.kind==='app' && state.modal.id===item.id) state.modal.version=item.version;
+  const wasInput=document.activeElement?.id==='app-response-text';const caret=wasInput ? [document.activeElement.selectionStart,document.activeElement.selectionEnd] : null;
   const scroll=$('detail-body').scrollTop;
   $('detail-mode').textContent=state.boardAccess?.respond ? 'Ответ сохраняется в OpenTour' : 'Режим просмотра';
   $('detail-title').textContent=item.title;$('detail-eyebrow').textContent='ОБСУЖДЕНИЕ ЗАДАЧИ · OPENTOUR';
@@ -526,11 +571,12 @@ function renderAppTask(item) {
     const input=node('textarea');input.id='app-response-text';input.maxLength=4000;input.required=true;input.value=draft.text;
     const status=node('p','connection-status');status.setAttribute('role','status');
     const submit=node('button','primary-button',draft.frozen ? 'Повторить сохранение' : 'Сохранить ответ');submit.type='submit';
+    submit.disabled=!!draft.saving;
     if (draft.frozen) {input.readOnly=true;target.disabled=true;status.textContent='Сохранение пока не подтверждено. Повтор использует тот же запрос и не дублирует сообщение.';}
     input.addEventListener('input',() => {draft.text=input.value;});
     target.addEventListener('change',() => {draft.replyTo=target.value;});
     form.addEventListener('submit',async event => {
-      event.preventDefault();if(submit.disabled) return;
+      event.preventDefault();if(submit.disabled || draft.saving) return;draft.saving=true;
       const session=state.session;
       if (!draft.frozen) {draft.requestId=crypto.randomUUID();draft.frozen={requestId:draft.requestId,kind:draft.replyTo ? 'answer' : 'comment',text:draft.text,...(draft.replyTo ? {replyTo:draft.replyTo} : {})};}
       submit.disabled=true;input.readOnly=true;target.disabled=true;status.textContent='Сохраняем…';
@@ -546,10 +592,87 @@ function renderAppTask(item) {
           draft.frozen=null;draft.requestId=null;input.readOnly=false;target.disabled=false;
           status.textContent='Ответ не сохранён. Исправьте текст и попробуйте снова.';submit.textContent='Сохранить ответ';
         } else {status.textContent='Сохранение не подтверждено. Текст сохранён в этой вкладке. Повторите тот же запрос.';submit.textContent='Повторить сохранение';}
-      } finally {submit.disabled=false;}
+      } finally {draft.saving=false;submit.disabled=false;}
     });
     form.append(label,target,input,node('p','field-hint','Не вводите пароли и ключи доступа. Закрытие окна сохраняет черновик в этой вкладке.'),submit,status);root.append(form);
   }
   $('detail-body').replaceChildren(root);$('detail-body').scrollTop=scroll;
   if (state.modal?.clientNavigationFocus) {delete state.modal.clientNavigationFocus;root.querySelector('[data-return-client]')?.focus({preventScroll:true});}
+  else if(wasInput) {const next=root.querySelector('#app-response-text');next?.focus({preventScroll:true});if(caret) next?.setSelectionRange(...caret);}
 }
+
+// Atlas shell: actual scoped task history; free dialogue remains explicitly unavailable.
+const atlasAgents={tasks:'Оператор',clients:'Creative',campaigns:'Оператор кампаний'};
+function setAtlasPanel(open,focus=false) {
+  state.panelOpen=!!open;const narrow=matchMedia('(max-width:700px)').matches;
+  $('conversation').hidden=!open;$('workspace').classList.toggle('panel-closed',!open);
+  $('dialog-toggle').setAttribute('aria-expanded',String(!!open));
+  $('dialog-toggle').textContent=open ? 'Свернуть диалог →' : 'Открыть диалог ←';
+  $('dialog-shade').hidden=!(open && narrow);
+  for(const id of ['main','masthead','app-footer']) $(id).inert=!!(open && narrow);
+  if(open && narrow) {$('conversation').setAttribute('role','dialog');$('conversation').setAttribute('aria-modal','true');}
+  else {$('conversation').removeAttribute('role');$('conversation').removeAttribute('aria-modal');}
+  if(focus) (open && narrow ? $('dialog-close') : $('dialog-toggle')).focus({preventScroll:true});
+}
+function updateAtlasContext(object) {
+  const task=state.panelTask;
+  const section=task?.section || state.view;
+  $('agent-name').textContent=atlasAgents[section] || atlasAgents.tasks;
+  $('agent-object').textContent=task?.title || object || ({tasks:'Работа проекта',clients:'Клиентская база',campaigns:'Материалы кампаний'})[state.view];
+  $('messages').replaceChildren();
+  if(task) {
+    $('dialog-hint').textContent='Сохранённое обсуждение задачи OpenTour. Ответить можно в карточке.';
+    for(const message of task.messages) {
+      const entry=node('div','message '+(message.kind==='request' ? 'agent' : 'user'));
+      entry.append(node('span','author',message.author_role==='administrator' ? 'Администратор' : 'Пользователь'),node('p','message-body',message.body));
+      entry.append(node('p','field-hint',deliveryLabels[message.delivery.state] || 'Доставка не подтверждена'));
+      $('messages').append(entry);
+    }
+    const open=button('Открыть обсуждение задачи',()=>{const narrow=matchMedia('(max-width:700px)').matches;if(narrow) setAtlasPanel(false);openDetails('app',task.id,narrow ? $('dialog-toggle') : open);});
+    $('messages').append(open);
+  } else {
+    $('dialog-hint').textContent='Контекст текущего раздела.';
+    $('messages').append(node('p','panel-notice','История свободного диалога ещё недоступна. Доступные обсуждения задач открываются с доски или из карточки клиента.'));
+  }
+  $('chat-text').placeholder='Ответить можно в карточке задачи';
+  $('chat-availability').textContent='Не подключено';
+  $('role-explanation').textContent=state.role==='user' ? 'В этой роли прямой ввод недоступен. Ответить на запрос можно в доступной карточке задачи.' : 'Свободный диалог ещё не подключён. Ответы и комментарии сохраняются в доступных карточках задач.';
+  $('chat-text').disabled=true;$('chat-send').disabled=true;
+  $('chat-status').textContent='';
+}
+async function refreshAtlasTask() {
+  const task=state.panelTask;if(!task || !state.token) return;
+  const session=state.session,request=++state.panelRequest;
+  try {
+    const {data}=await api('/api/board-tasks/'+encodeURIComponent(task.id));
+    if(session!==state.session || request!==state.panelRequest || state.panelTask?.id!==task.id) return;
+    state.panelTask=data;const scroll=$('messages').scrollTop;updateAtlasContext();$('messages').scrollTop=scroll;
+    if(state.modal?.kind==='app' && state.modal.id===task.id && !state.drafts.get(task.id)?.saving && state.modal.version!==data.version) renderAppTask(data);
+  } catch(error) {
+    if(session!==state.session || request!==state.panelRequest) return;
+    state.panelTask=null;updateAtlasContext();
+    if(error.status===401 || error.status===403) resetSession(errorText(error));
+    else if(state.modal?.kind==='app' && state.modal.id===task.id) renderDetailError(errorText(error));
+  }
+}
+$('dialog-toggle').addEventListener('click',()=>setAtlasPanel(!state.panelOpen,true));
+$('dialog-close').addEventListener('click',()=>setAtlasPanel(false,true));
+$('dialog-shade').addEventListener('click',()=>setAtlasPanel(false,true));
+$('conversation').addEventListener('keydown',event=>{
+  if(!matchMedia('(max-width:700px)').matches || !state.panelOpen) return;
+  if(event.key==='Escape') {event.preventDefault();setAtlasPanel(false,true);}
+  if(event.key==='Tab') {
+    const controls=[...$('conversation').querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')].filter(el=>el.getClientRects().length);
+    const first=controls[0],last=controls[controls.length-1];
+    if(event.shiftKey && document.activeElement===first) {event.preventDefault();last?.focus();}
+    else if(!event.shiftKey && document.activeElement===last) {event.preventDefault();first?.focus();}
+  }
+});
+let atlasWasNarrow=matchMedia('(max-width:700px)').matches;
+window.addEventListener('resize',()=>{
+  const narrow=matchMedia('(max-width:700px)').matches;
+  if(narrow && !atlasWasNarrow) setAtlasPanel(false);
+  else setAtlasPanel(state.panelOpen);
+  if(!narrow && atlasWasNarrow && document.activeElement?.id==='dialog-close') $('dialog-toggle').focus({preventScroll:true});
+  atlasWasNarrow=narrow;
+});
