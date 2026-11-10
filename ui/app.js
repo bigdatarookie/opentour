@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
   trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0,
-  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map(), role:null, panelOpen:false, panelTask:null, panelRequest:0, boardRender:0, boardAnimations:[] };
+  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map(), role:null, panelOpen:false, panelTask:null, panelRequest:0, boardRender:0, boardAnimations:[], boardInterrupted:false, boardFocus:null };
 const roles = {developer:'Разработка',devops:'Инфраструктура','qa-code':'Проверка кода','qa-system':'Проверка системы',
   engineer:'Данные',creative:'Креатив',designer:'Дизайн',operator:'Оператор',lead:'Координация'};
 const columnLabels = {planned:'Запланировано',in_progress:'В работе',needs_human:'Требуется человек',review:'На проверке',done:'Выполнено',unknown:'Неизвестно'};
@@ -125,14 +125,17 @@ function showView(view) {
 for (const el of document.querySelectorAll('[data-view]')) el.addEventListener('click', () => showView(el.dataset.view));
 document.querySelector('.brand').addEventListener('click',(event) => {event.preventDefault();showView('tasks');});
 $('refresh').addEventListener('click', () => state.view === 'tasks' ? loadBoard() : state.view === 'clients' ? loadClients() : loadCampaigns());
-$('work-filter').addEventListener('change', () => renderBoard());
+$('work-filter').addEventListener('change', () => renderBoard(false));
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) {state.boardInterrupted=true;if(state.token && state.board) renderBoard(false);else cancelBoardMotion();}
+});
 
 function ownerLabel(owner) { return roles[owner?.role] || (owner?.kind === 'human_request' ? 'Требуется человек' : 'Команда'); }
 function restoreCardFocus(id) {
   for (const el of document.querySelectorAll('[data-object-id]')) if (el.dataset.objectId === id) {el.focus({preventScroll:true});return;}
 }
 function cancelBoardMotion() {
-  state.boardRender++;for(const animation of state.boardAnimations) animation.cancel();state.boardAnimations=[];
+  state.boardFocus=null;state.boardRender++;for(const animation of state.boardAnimations) animation.cancel();state.boardAnimations=[];
   for(const wrap of $('board').querySelectorAll('.task-wrap')) wrap.inert=false;
 }
 function updateWorkCount() {
@@ -141,14 +144,17 @@ function updateWorkCount() {
 }
 async function renderBoard(motion=true) {
   if (!state.board || !state.token) return;
-  cancelBoardMotion();const ticket=state.boardRender,session=state.session;
-  const active=document.activeElement?.dataset?.objectId, filter=$('work-filter').value;
+  // Carry focus through an interrupted collapse, but never override newer user focus.
+  const focused=document.activeElement;
+  const restoreFocus=$('board').contains(focused) ? focused : focused===document.body && state.boardFocus?.isConnected ? state.boardFocus : null;
+  cancelBoardMotion();state.boardFocus=restoreFocus;
+  const ticket=state.boardRender,session=state.session;
+  const filter=$('work-filter').value;
   const items=state.board.items;
   const columns=items.length ? state.board.columns.filter(col => (col.id !== 'unknown' || items.some(item => item.column === 'unknown')) && (filter === 'all' || filter === col.id)) : [];
   const old=new Map([...$('board').querySelectorAll('.task-wrap')].map(wrap=>[wrap.dataset.taskId,wrap]));
   const moving=items.filter(item=>old.has(item.id) && old.get(item.id).closest('.column')?.dataset.column !== item.column);
-  const animate=motion && state.view==='tasks' && !matchMedia('(prefers-reduced-motion:reduce)').matches;
-  const scroll=$('board').scrollLeft;
+  const animate=motion && !document.hidden && state.view==='tasks' && !matchMedia('(prefers-reduced-motion:reduce)').matches;
   if(animate) {
     for(const item of moving) {
       const wrap=old.get(item.id);wrap.inert=true;
@@ -158,6 +164,7 @@ async function renderBoard(motion=true) {
   }
   if(ticket!==state.boardRender || session!==state.session || !state.token) return;
   for(const animation of state.boardAnimations) animation.cancel();state.boardAnimations=[];
+  const scroll=$('board').scrollLeft,mainScroll=$('main').scrollTop;
   const fragment=document.createDocumentFragment();
   for(const col of columns) {
     const section=node('section','column');section.dataset.column=col.id;section.setAttribute('aria-label',col.label);
@@ -178,14 +185,15 @@ async function renderBoard(motion=true) {
   }
   if(!items.length) fragment.append(stateBox('Пока нет задач','Для этого проекта нет доступных работ.'));
   if(!columns.length && items.length) fragment.append(stateBox('Нет задач на этом этапе','Выберите другой этап.'));
-  $('board').replaceChildren(fragment);$('board').scrollLeft=scroll;$('board').classList.toggle('has-unknown',columns.length>5);
+  $('board').replaceChildren(fragment);$('board').scrollLeft=scroll;$('main').scrollTop=mainScroll;$('board').classList.toggle('has-unknown',columns.length>5);
   $('board').setAttribute('aria-busy','false');$('work-total').textContent=items.length;updateWorkCount();
   if(animate) for(const item of moving) {
     const wrap=old.get(item.id);if(!wrap.isConnected) continue;
     const animation=wrap.animate([{height:'0px',opacity:0,marginBottom:'0px'},{height:wrap.offsetHeight+'px',opacity:1,marginBottom:'13px'}],{duration:150,easing:'ease-out'});
     state.boardAnimations.push(animation);
   }
-  if(active && !$('detail-dialog').open) restoreCardFocus(active);
+  if(restoreFocus?.isConnected && !$('detail-dialog').open && [document.body,restoreFocus].includes(document.activeElement)) restoreFocus.focus({preventScroll:true});
+  state.boardFocus=null;
 }
 
 async function loadBoard(quiet=false) {
@@ -204,7 +212,7 @@ async function loadBoard(quiet=false) {
       if (previous?.cursor?.epoch === data.cursor?.epoch && data.cursor.sequence < previous.cursor.sequence) return;
       state.board=data; state.etag=result.etag;
       if (!previous || previous.version !== data.version) {
-        renderBoard();
+        renderBoard(!!previous && !state.boardInterrupted && previous.cursor?.epoch===data.cursor?.epoch);
         if (state.modal?.kind === 'work') {
           const changed=data.items.find(item => item.id === state.modal.id);
           if (!changed) renderDetailError('Задача больше не доступна в текущем проекте.');
@@ -214,10 +222,12 @@ async function loadBoard(quiet=false) {
       }
       if (data.queueWindowComplete === false) showNotice('board-notice','Показана часть нативной истории. Завершение работ по ней не подтверждается.');
     }
+    state.boardInterrupted=document.hidden;
     if (!reloadingDetail && state.modal?.kind === 'work') state.modal.observationRefresh?.();
   } catch(error) {
     if (session !== state.session) return;
     if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
+    state.boardInterrupted=true;
     $('board-updated').textContent='Обновление недоступно';
     if (state.board) showNotice('board-notice',errorText(error)+' Показаны последние полученные данные.',() => loadBoard());
     else { $('board').replaceChildren(stateBox('Доска недоступна',errorText(error),() => loadBoard(),'↻')); $('board').setAttribute('aria-busy','false'); }

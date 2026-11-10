@@ -1,0 +1,29 @@
+{
+  "mode": "SYNTHETIC ONLY",
+  "passed": 19,
+  "checks": [
+    "collapse_in_original_column_single_noninteractive_node",
+    "collapse_reduces_vertical_space",
+    "expand_follows_collapse_in_new_column_same_node",
+    "expand_restores_vertical_space",
+    "duplicate_refresh_does_not_repeat_motion",
+    "reconnect_uses_current_state_without_replay",
+    "native_modal_stays_open_and_updates",
+    "modal_close_returns_to_same_card",
+    "app_modal_input_focus_selection_retained",
+    "reduced_motion_direct_move_same_identity",
+    "new_user_focus_not_stolen",
+    "interrupted_refresh_keeps_latest_source_one_card",
+    "latest_vertical_scroll_preserved",
+    "horizontal_scroll_preserved",
+    "new_source_epoch_skips_history",
+    "hidden_document_never_animates",
+    "return_from_hidden_uses_current_state",
+    "filter_cancels_stale_transition",
+    "disconnect_cancels_without_private_dom_resurrection"
+  ],
+  "crm_access": false,
+  "native_writes": false,
+  "app_replies_sent": false,
+  "fixture_task_seeded": true
+}
