@@ -1,0 +1,107 @@
+{
+  "thumburl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Light_over_the_forest_%2852667805061%29.jpg/1920px-Light_over_the_forest_%2852667805061%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+  "thumbwidth": 1400,
+  "thumbheight": 787,
+  "responsiveUrls": {
+    "2": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Light_over_the_forest_%2852667805061%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled"
+  },
+  "thumbattribs": {
+    "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Light_over_the_forest_%2852667805061%29.jpg/1920px-Light_over_the_forest_%2852667805061%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "decoding": "async",
+    "loading": "lazy",
+    "width": 1400,
+    "height": 787,
+    "srcset": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Light_over_the_forest_%2852667805061%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled 2x"
+  },
+  "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Light_over_the_forest_%2852667805061%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+  "descriptionurl": "https://commons.wikimedia.org/wiki/File:Light_over_the_forest_(52667805061).jpg",
+  "descriptionshorturl": "https://commons.wikimedia.org/w/index.php?curid=132417824",
+  "extmetadata": {
+    "DateTime": {
+      "value": "2023-05-28 16:32:47",
+      "source": "mediawiki-metadata",
+      "hidden": ""
+    },
+    "ObjectName": {
+      "value": "Light over the forest (52667805061)",
+      "source": "mediawiki-metadata"
+    },
+    "CommonsMetadataExtension": {
+      "value": 1.2,
+      "source": "extension",
+      "hidden": ""
+    },
+    "Categories": {
+      "value": "Nature of the Republic of Karelia|Snow in the Republic of Karelia|Files with coordinates missing SDC location of creation|Flickr images reviewed by FlickreviewR 2",
+      "source": "commons-categories",
+      "hidden": ""
+    },
+    "Assessments": {
+      "value": "",
+      "source": "commons-categories",
+      "hidden": ""
+    },
+    "GPSLatitude": {
+      "value": "66.301446",
+      "source": "commons-desc-page"
+    },
+    "GPSLongitude": {
+      "value": "33.030524",
+      "source": "commons-desc-page"
+    },
+    "GPSMapDatum": {
+      "value": "WGS-84",
+      "source": "commons-desc-page",
+      "hidden": ""
+    },
+    "ImageDescription": {
+      "value": "Light over the forest",
+      "source": "commons-desc-page"
+    },
+    "DateTimeOriginal": {
+      "value": "2023-02-04 10:07",
+      "source": "commons-desc-page"
+    },
+    "Credit": {
+      "value": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/photos/lumiegor/52667805061/\">Light over the forest</a>",
+      "source": "commons-desc-page"
+    },
+    "Artist": {
+      "value": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/194545230@N04\">Egor Plenkin</a> from Karelia",
+      "source": "commons-desc-page"
+    },
+    "LicenseShortName": {
+      "value": "CC BY 2.0",
+      "source": "commons-desc-page",
+      "hidden": ""
+    },
+    "UsageTerms": {
+      "value": "Creative Commons Attribution 2.0",
+      "source": "commons-desc-page"
+    },
+    "AttributionRequired": {
+      "value": "true",
+      "source": "commons-desc-page",
+      "hidden": ""
+    },
+    "LicenseUrl": {
+      "value": "https://creativecommons.org/licenses/by/2.0",
+      "source": "commons-desc-page"
+    },
+    "Copyrighted": {
+      "value": "True",
+      "source": "commons-desc-page",
+      "hidden": ""
+    },
+    "Restrictions": {
+      "value": "",
+      "source": "commons-desc-page",
+      "hidden": ""
+    },
+    "License": {
+      "value": "cc-by-2.0",
+      "source": "commons-templates",
+      "hidden": ""
+    }
+  }
+}

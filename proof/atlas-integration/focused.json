@@ -1,0 +1,29 @@
+{
+  "mode": "SYNTHETIC ONLY",
+  "passed": 21,
+  "checks": [
+    "no_private_data_before_access",
+    "local_atlas_fonts_loaded",
+    "intro_removed_without_reserved_space",
+    "role_from_server_no_demo_controls",
+    "no_drag_or_synthetic_event_action",
+    "source_transition_one_stable_card",
+    "vertical_collapse_expand_ran",
+    "reduced_motion_skips_animation",
+    "duplicate_refresh_no_duplicate_card",
+    "two_equal_width_rounded_client_blocks",
+    "actual_count_source_not_dossier_fixture",
+    "refresh_retains_linked_reply_draft",
+    "saved_reply_in_actual_right_panel",
+    "real_delivery_readback_not_processing_claim",
+    "mobile_client_blocks_fit",
+    "mobile_panel_traps_background",
+    "mobile_panel_keyboard_wrap",
+    "mobile_panel_close_returns_focus",
+    "administrator_role_server_observed",
+    "existing_campaign_stays_fixture_unsent",
+    "disconnect_clears_panel_history"
+  ],
+  "crm_access": false,
+  "native_business_writes": false
+}

@@ -57,6 +57,7 @@ def synthetic_native():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true')
+    parser.add_argument('--live-work-root', type=Path, help='With live: existing registered native specification root')
     parser.add_argument('--organization-detail',action='store_true',help='Focused synthetic populated Organization detail proof; no live sources or screenshots')
     parser.add_argument('--native-observations', action='store_true', help='Targeted native-observation UI checks; no CRM')
     parser.add_argument('--native-work-root',type=Path,help='With native-observations: existing native specification root, no screenshots')
@@ -65,6 +66,8 @@ def main():
     parser.add_argument('--proof-dir', type=Path, help='Synthetic screenshots only')
     parser.add_argument('--browser', default='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
     args = parser.parse_args()
+    if args.live_work_root and not args.live:
+        parser.error('live-work-root requires live')
     if args.native_work_root and (not args.native_observations or not args.native_original_id or args.proof_dir):
         parser.error('native-work-root requires native-observations and native-original-id; screenshots forbidden')
     if args.native_original_id and not args.native_work_root:
@@ -79,7 +82,7 @@ def main():
     if args.crm_credential_file and not args.live:
         parser.error('synthetic runs never use a CRM credential')
     crm = EspoCRM(credential_file=args.crm_credential_file) if args.live else SyntheticCRM()
-    native = NativeWork(ROOT / 'opentour-rig', MISSION) if args.live else synthetic_native()
+    native = NativeWork(args.live_work_root or ROOT / 'opentour-rig', MISSION) if args.live else synthetic_native()
     if args.native_observations:
         from native_observation_ui_fixture import ObservationNative, NoCRM
         native,crm=(NativeWork(args.native_work_root,MISSION) if args.native_work_root else ObservationNative()),NoCRM()

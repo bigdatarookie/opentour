@@ -1,4 +1,4 @@
-# Local read-only workspace
+# Atlas local workspace
 
 The UI is served by the existing Python backend. No Node dependency, separate frontend server, build step, account provisioning or deployment is needed.
 
@@ -12,13 +12,37 @@ Open `http://127.0.0.1:18083/` and enter an existing OpenTour application read g
 
 The application token lives only in the current tab's memory; it is not put in a URL, cookie, local/session storage or generated asset. Reload requires re-entry. Disconnect clears the token, rendered data, selected detail, search and filters. The private CRM credential remains inside the backend. The service identity's inherited EspoCRM permissions remain as documented in [backend README](../backend/README.md); the UI adds no source operations.
 
-## Delivered surface
+## Selected Atlas integration
+
+The user-selected V3 source is preserved in [prototypes/opentour-v3](../prototypes/opentour-v3/README.md). Its historical demo-only instructions are superseded by assignment qitem-opentour-v3-integration-20261111. Product UI loads only ui/app.js and the existing authenticated APIs, never the prototype fixture/controller. Local Prata and Commissioner fonts retain their OFL notices. Archived photography remains attributed in the prototype and is not presented as a real offer.
+
+The project intro is removed, including its spacing. Clients use separate equal-width rounded filter/table regions with the actual API count and CRM source between them. The right panel shows only actual scoped OpenTour task history and delivery state; free dialogue is explicitly unavailable. Replies/comments use existing authorized task modals, retained drafts, idempotency and app DB/outbox. Native cards follow source changes with vertical collapse/expand, skip motion for reduced-motion, and retain one stable card. Roles come from the backend; there is no demo role switch or simulated event control.
+
+For a standalone synthetic preview with a temporary DB, no real CRM/daemon and no native delivery:
+
+```sh
+python3 tools/atlas_preview.py --port 18085 --access-file /private/tmp/opentour-atlas-preview-access.json
+```
+
+Open the printed loopback URL. The new mode-0600 access file contains synthetic administrator/user keys for this process only; do not paste them into chat or Git. Ctrl-C closes the server and removes its keys/temporary DB. An existing access file is refused and preserved. This preview does not grant access to real project data.
+
+For the real local backend use existing authorized private references with --board-db as appropriate. In an isolated worktree, add --work-root /Users/garry/Documents/git/opentour/opentour-rig to read the registered native root. No importer/profile/runtime binding is changed.
+
+Focused synthetic integration verification:
+
+```sh
+python3 tools/atlas_browser_probe.py --proof-dir /private/tmp/opentour-atlas-proof
+```
+
+The proof directory contains synthetic-only screenshots. It exercises requested layout edits, source card movement, client-to-task reply/save/read-back, actual stored delivery, mobile panel/focus, server roles and unsent campaign labels. Existing read and conversation probes cover search/filter/paging/error/retry, unknown-save replay, restart and revocation. Full Python regressions run in the existing Actions workflow.
+
+## Existing data behavior
 
 - Default Tasks view: native aggregate cards, source-derived columns, owner role, last authored result, blockers, stage filter and task detail dialog. No per-qitem tracker, drag-and-drop or manual status control.
 - Clients: the existing CRM list/search/type/channel filters, paging, person/organization details, technical-surname explanation, provenance and a validated local CRM deep link. Unknown values stay unknown; no enrichment or editing.
 - Loading, empty results, retryable source errors, and an explicit stale-data notice when native refresh fails after a successful read. Counts stay unknown until loaded; errors are not zero-result successes.
 - Shared native dialog supports Escape, focus return, scroll and responsive detail layout. A native-board refresh can update the open task detail without creating a second card. Client filters stay in memory when switching sections. Narrow screens stack board columns at readable widths.
-- Read-only status throughout. Campaigns projects the pinned existing r01 local FIXTURE package with HTML/text/manifest views, sources and caveats; it is PREVIEW-ONLY, NOT CONTENT-APPROVED and NOT SENT. No chat/history, application Operator, reply field, human-decision action, credential provisioning or campaign send is fabricated.
+- CRM/native source operations remain read-only; separately scoped application task replies save in OpenTour DB. Campaigns projects the pinned existing r01 local FIXTURE package with HTML/text/manifest views, sources and caveats; it is PREVIEW-ONLY, NOT CONTENT-APPROVED and NOT SENT. No free dialogue, application Operator, native human-decision action, credential provisioning or campaign send is fabricated.
 
 Native board polling uses the existing ETag/version/cursor contract every 15 seconds while the document is visible. Manual Refresh is also available. Duplicate content does not rebuild the board. Backend source updates remain authoritative. The first read UI does not implement the full collapse/expand transition choreography from UI_FLOW; the actual live transition journey remains outside acceptance here. Reduced motion disables decorative animation.
 

@@ -1,0 +1,25 @@
+{
+  "mode": "SYNTHETIC ONLY",
+  "checks": [
+    "no_discussion_before_access",
+    "existing_native_board_retained",
+    "request_visible_with_scoped_answer",
+    "draft_survives_close",
+    "validation_error_allows_edit",
+    "unknown_save_keeps_frozen_intent",
+    "retry_has_one_linked_answer",
+    "text_is_inert",
+    "saved_distinct_from_pending_delivery",
+    "restart_preserves_history",
+    "delivered_not_agent_processing",
+    "mobile_no_horizontal_overflow",
+    "reply_mode_label",
+    "mobile_footer_reachable",
+    "revocation_clears_history_and_drafts"
+  ],
+  "passed": 15,
+  "database_messages": 2,
+  "synthetic_deliveries": 2,
+  "native_business_writes": false,
+  "crm_access": false
+}
