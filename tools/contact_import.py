@@ -49,7 +49,7 @@ class ImportFailure(Exception):
         self.code = code
 
 
-def safe_crm_error_code(status: int, payload: Any) -> str:
+def safe_crm_error_code(status: int, payload: Any, status_reason: str | None = None) -> str:
     """Return only an allowlisted, value-free CRM error classification."""
     code = f"crm_http_{status}"
     try:
@@ -61,6 +61,8 @@ def safe_crm_error_code(status: int, payload: Any) -> str:
             return f"{code}_{field}_{error_type}"
     except (AttributeError, TypeError):
         pass
+    if status == 409 and status_reason == "duplicate":
+        return f"{code}_duplicate"
     return code
 
 
@@ -132,7 +134,7 @@ class CRM:
                     payload = json.loads(exc.read())
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
-            code = safe_crm_error_code(exc.code, payload)
+            code = safe_crm_error_code(exc.code, payload, exc.headers.get("X-Status-Reason") if exc.headers else None)
             raise ImportFailure(code) from None
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
             raise ImportFailure("crm_transport_or_response_error") from None
