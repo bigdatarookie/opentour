@@ -107,7 +107,7 @@ class StoreTests(unittest.TestCase):
         with self.store.db() as db:
             self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0], 1)
             self.assertEqual(db.execute('PRAGMA busy_timeout').fetchone()[0], 5000)
-            db.execute('PRAGMA user_version=3')
+            db.execute('PRAGMA user_version=4')
         self.code('board_schema_unsupported', lambda: BoardStore(self.path))
         os.chmod(self.path, 0o644)
         self.code('board_database_not_private', lambda: BoardStore(self.path))
@@ -275,6 +275,7 @@ class TransportWireTests(unittest.TestCase):
                 store = BoardStore(Path(tmp) / 'data' / 'board.sqlite3')
                 task = store.create(ADMIN, {'requestId': 'wire-create-0001', 'title': 'Synthetic context', 'description': 'Synthetic only', 'section': 'tasks'})
                 transport = object.__new__(NativeContext)
+                transport.source=SOURCE;transport.board_db=None
                 transport.client = JsonGET('http://127.0.0.1:' + str(server.server_port), {'X-OpenRig-Session': SOURCE})
                 delivery_id = task['messages'][0]['delivery']['id']
                 self.assertEqual(deliver_one(store, transport, delivery_id), 'unknown')

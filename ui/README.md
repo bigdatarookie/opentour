@@ -121,3 +121,16 @@ This is a populated synthetic internal HTTP/UI contract proof. It does not prove
 ## Focused board transition verification
 
 Run python3 tools/board_transition_probe.py from the repository root. It starts only a temporary synthetic backend/browser and seeds one temporary app task; it does not contact CRM/native daemon, send an app reply, or read owner sources/credentials. Paused Web Animations let it inspect actual intermediate vertical geometry and old/new column membership, then exercise modal status, unsent input/caret, reduced motion, superseding source refresh, filter/scroll/focus, reconnect/source epoch, synthetic visibility events and disconnect cleanup. The product contains no synthetic event/status control. Evidence: proof/board-transition/RESULTS.md.
+
+
+## v0.12 addressed answer delivery
+
+The existing app discussion now distinguishes saved/delivered/received/accepted/continued, needs clarification/rejection and failed/unknown. Its card follows the current addressed request rather than closing it when any comment is saved. Immutable request version and server actor are bound in the outbox; the browser sends replyVersion explicitly. Draft text remains when a stale/already accepted request returns409. Agent results/reasons are plain text; no unrestricted chat or native human action is enabled.
+
+The worker is an operational service, not a developer drain. See backend/BOARD_CONVERSATIONS.md for service identity, supervisor/DB contract and actual-recipient receive/report commands. A reported substantive continuation is distinct from a transport ACK; real agent verification belongs to independent System QA.
+
+A boardOnly:true test grant uses one exact task ID and cannot read CRM/native/campaign sources. Atlas keeps its discussion usable and explains unavailable source sections. This is a synthetic application identity, not a named manager; omit CRM credentials in that runtime and revoke the grant after QA. Existing source-enabled grants are unchanged.
+
+Default root-local hosting remains unchanged. --public-base-url https://existing-host/opentour enables a configured HTTPS proxy prefix, including local styles/fonts/API and email preview links. Host/Origin acceptance is explicit; no forwarded-header trust or public raw backend/daemon/CRM. This support is not evidence of publication.
+
+Focused builder browser: python3 tools/board_continuation_probe.py (also --prefix). It uses a fake native transport/recipient and temporary synthetic task, with no actual agent/CRM/native queue calls. Independent System QA must replace that fixture step with a real addressed agent and observe useful original-obligation continuation, stage timings and unresolved backlog on the exact accepted candidate.

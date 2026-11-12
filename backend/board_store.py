@@ -81,7 +81,7 @@ class BoardStore:
         self.path = path
         with self.db() as db:
             schema = db.execute('PRAGMA user_version').fetchone()[0]
-            if schema not in (0, 1, 2):
+            if schema not in (0, 1, 2, 3):
                 raise Failure('board_schema_unsupported', 503)
             if schema == 0:
                 for sql in SCHEMA:
@@ -90,6 +90,10 @@ class BoardStore:
                 for sql in CLIENT_SCHEMA:
                     db.execute(sql)
                 db.execute('PRAGMA user_version=2')
+            if schema < 3:
+                for sql in DELIVERY_SCHEMA:
+                    db.execute(sql)
+                db.execute('PRAGMA user_version=3')
 
     @contextmanager
     def db(self):
@@ -138,13 +142,18 @@ class BoardStore:
 
     def create(self, principal, body, validate_client=None):
         self.permit(principal, create=True)
-        fields(body, ('requestId', 'title', 'description', 'section', 'requestText', 'clientRef'))
+        fields(body, ('requestId', 'title', 'description', 'section', 'requestText', 'clientRef', 'continuationRef'))
         payload = {'title': text(body.get('title'), 240), 'description': text(body.get('description'), 4000),
                    'section': body.get('section')}
         if not isinstance(payload['section'], str) or payload['section'] not in DESTINATIONS:
             raise Failure('board_section_forbidden', 400)
         question = text(body['requestText'], 4000) if 'requestText' in body else None
         payload['requestText'] = question
+        continuation = body.get('continuationRef')
+        if continuation is not None:
+            if not isinstance(continuation, str) or not re.fullmatch(r'qitem-[A-Za-z0-9_-]{1,160}', continuation):
+                raise Failure('invalid_continuation_reference', 400)
+            payload['continuationRef'] = continuation
         reference = client_reference(body.get('clientRef'))
         if reference is not None:
             payload['clientRef'] = reference  # Absent refs retain v1 request digest/replay semantics.
@@ -160,6 +169,8 @@ class BoardStore:
                 task_id = 'task_' + uuid.uuid4().hex
                 db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',
                            (task_id, PROJECT, payload['title'], payload['description'], payload['section'], principal.subject, now()))
+                if continuation is not None:
+                    db.execute('INSERT INTO task_execution VALUES(?,?)', (task_id, continuation))
                 if reference is not None:
                     db.execute('INSERT INTO task_clients VALUES(?,?,?)', (task_id, reference['entity'], reference['externalId']))
                 self.remember(db, principal, 'create', body['requestId'], payload, task_id)
@@ -171,10 +182,13 @@ class BoardStore:
         db.execute('INSERT INTO messages(id,task_id,author,author_role,kind,body,reply_to,created_at) VALUES(?,?,?,?,?,?,?,?)',
                    (message_id, task_id, principal.subject, principal.role, kind, content, reply_to, now()))
         task = db.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
-        parent = db.execute('SELECT body FROM messages WHERE id=?', (reply_to,)).fetchone() if reply_to else None
+        parent = db.execute('SELECT * FROM messages WHERE id=?', (reply_to,)).fetchone() if reply_to else None
         context = {'project': PROJECT, 'taskId': task_id, 'messageId': message_id, 'replyTo': reply_to,
                    'title': task['title'], 'kind': kind, 'text': content, 'requestText': parent['body'] if parent else None,
                    'notice': 'OpenTour saved conversation context. Not a native human decision or permission for business action.'}
+        context.update(author=principal.subject, authorRole=principal.role,
+                       continuationRef=self.execution_ref(db, task_id),
+                       requestVersion=self.message_version(parent) if parent else None)
         reference = self.client_ref(db, task_id)
         if reference is not None:
             context['clientRef'] = reference
@@ -187,11 +201,13 @@ class BoardStore:
         return message_id
 
     def append(self, principal, task_id, body):
-        fields(body, ('requestId', 'kind', 'text', 'replyTo'))
+        fields(body, ('requestId', 'kind', 'text', 'replyTo', 'replyVersion'))
         kind = body.get('kind')
         if kind not in ('answer', 'comment', 'request') or (kind == 'request' and principal.role != 'administrator'):
             raise Failure('board_message_kind_forbidden', 403)
         payload = {'kind': kind, 'text': text(body.get('text'), 4000), 'replyTo': body.get('replyTo')}
+        if 'replyVersion' in body:
+            payload['replyVersion'] = body['replyVersion']
         if (kind == 'answer') != isinstance(payload['replyTo'], str) or (kind != 'answer' and payload['replyTo'] is not None):
             raise Failure('answer_request_link_required', 400)
         with self.db() as db:
@@ -199,18 +215,44 @@ class BoardStore:
             message_id = self.replay(db, principal, 'message:' + task_id, body.get('requestId'), payload)
             if not message_id:
                 if kind == 'answer':
-                    parent = db.execute('SELECT kind,task_id FROM messages WHERE id=?', (payload['replyTo'],)).fetchone()
+                    parent = db.execute('SELECT * FROM messages WHERE id=?', (payload['replyTo'],)).fetchone()
                     if not parent or parent['kind'] != 'request' or parent['task_id'] != task_id:
                         raise Failure('answer_request_not_found', 404)
+                    if 'replyVersion' in payload and payload['replyVersion'] != self.message_version(parent):
+                        raise Failure('answer_request_version_conflict', 409)
+                    accepted = db.execute("SELECT 1 FROM messages m JOIN outbox o ON o.message_id=m.id WHERE m.reply_to=? AND o.processing IN ('accepted','continued')", (parent['id'],)).fetchone()
+                    if accepted:
+                        raise Failure('answer_request_already_accepted', 409)
                 message_id = self.insert_message(db, task_id, principal, kind, payload['text'], payload['replyTo'])
                 self.remember(db, principal, 'message:' + task_id, body['requestId'], payload, message_id)
         return {'taskId': task_id, 'messageId': message_id, 'persistence': 'saved', **self.message(principal, task_id, message_id)}
 
+    @staticmethod
+    def message_version(row):
+        return version({k: row[k] for k in ('id', 'task_id', 'kind', 'body', 'author', 'author_role', 'created_at')})
+
+    def execution_ref(self, db, task_id):
+        row = db.execute('SELECT native_ref FROM task_execution WHERE task_id=?', (task_id,)).fetchone()
+        return row['native_ref'] if row else None
+
+    def request_state(self, db, task_id):
+        request = db.execute("SELECT id FROM messages WHERE task_id=? AND kind='request' ORDER BY seq DESC LIMIT 1", (task_id,)).fetchone()
+        if not request:
+            return 'comment_only'
+        answer = db.execute(MESSAGE_SELECT + " WHERE m.reply_to=? ORDER BY CASE o.processing WHEN 'continued' THEN 0 WHEN 'accepted' THEN 1 ELSE 2 END,m.seq DESC LIMIT 1", (request['id'],)).fetchone()
+        if not answer:
+            return 'awaiting_answer'
+        if answer['processing'] != 'unconfirmed':
+            return answer['processing']
+        return 'saved' if answer['state'] == 'pending' else answer['state']
+
     def project_message(self, row):
         return {k: row[k] for k in ('id', 'kind', 'body', 'reply_to', 'author', 'author_role', 'created_at')} | {
-            'persistence': 'saved', 'delivery': {'id': row['outbox_id'], 'state': row['state'],
+            'version': self.message_version(row), 'persistence': 'saved', 'delivery': {'id': row['outbox_id'], 'state': row['state'],
                 'executionRef': row['native_id'] if row['state'] == 'delivered' else None,
-                'processing': row['processing'], 'error': row['error']}}
+                'processing': row['processing'], 'error': row['error'],
+                'reason': row['processing_reason'], 'result': row['result_text'], 'evidenceRef': row['evidence_ref'],
+                'timestamps': {k: row[k] for k in ('delivered_at','received_at','accepted_at','continued_at')}}}
 
     def message(self, principal, task_id, message_id):
         with self.db() as db:
@@ -225,6 +267,8 @@ class BoardStore:
             task = dict(self.task(db, principal, task_id))
             rows = db.execute(MESSAGE_SELECT + ' WHERE m.task_id=? ORDER BY m.seq DESC LIMIT 101', (task_id,)).fetchall()
             task['clientRef'] = self.client_ref(db, task_id)
+            task['continuationRef'] = self.execution_ref(db, task_id)
+            task['requestState'] = self.request_state(db, task_id)
             task['messages'] = [self.project_message(r) for r in reversed(rows[:100])]
             task['historyComplete'] = len(rows) <= 100
             task['version'] = version(task)
@@ -258,10 +302,10 @@ class BoardStore:
                 sql += ' AND id IN (' + ','.join('?' for _ in principal.board_tasks) + ')'
                 params.extend(principal.board_tasks)
             rows = db.execute(sql + ' ORDER BY created_at DESC,id LIMIT 101', params).fetchall()
-            return {'project': PROJECT, 'items': [dict(r) for r in rows[:100]], 'complete': len(rows) <= 100}
+            return {'project': PROJECT, 'items': [{**dict(r), 'requestState': self.request_state(db,r['id'])} for r in rows[:100]], 'complete': len(rows) <= 100}
 
 
-MESSAGE_SELECT = '''SELECT m.*,o.id AS outbox_id,o.state,o.native_id,o.processing,o.error
+MESSAGE_SELECT = '''SELECT m.*,o.id AS outbox_id,o.state,o.native_id,o.processing,o.error,o.processing_reason,o.result_text,o.evidence_ref,o.delivered_at,o.received_at,o.accepted_at,o.continued_at
 FROM messages m JOIN outbox o ON o.message_id=m.id'''
 SCHEMA = [
 '''CREATE TABLE tasks(id TEXT PRIMARY KEY,project TEXT NOT NULL,title TEXT NOT NULL,description TEXT NOT NULL,
@@ -283,3 +327,19 @@ CLIENT_SCHEMA = [
 """CREATE TABLE task_clients(task_id TEXT PRIMARY KEY REFERENCES tasks(id),
 entity TEXT NOT NULL CHECK(entity IN ('Contact','Account')),external_id TEXT NOT NULL)""",
 'CREATE INDEX task_clients_reference ON task_clients(entity,external_id,task_id)']
+
+
+DELIVERY_SCHEMA = [
+"CREATE TABLE task_execution(task_id TEXT PRIMARY KEY REFERENCES tasks(id),native_ref TEXT NOT NULL)",
+"ALTER TABLE outbox ADD COLUMN sender TEXT NOT NULL DEFAULT 'platform-developer@opentour-rig'",
+"ALTER TABLE outbox ADD COLUMN native_body TEXT",
+"ALTER TABLE outbox ADD COLUMN delivered_at TEXT",
+"ALTER TABLE outbox ADD COLUMN received_at TEXT",
+"ALTER TABLE outbox ADD COLUMN accepted_at TEXT",
+"ALTER TABLE outbox ADD COLUMN continued_at TEXT",
+"ALTER TABLE outbox ADD COLUMN processing_reason TEXT",
+"ALTER TABLE outbox ADD COLUMN result_text TEXT",
+"ALTER TABLE outbox ADD COLUMN evidence_ref TEXT",
+"CREATE TABLE processing_events(outbox_id TEXT NOT NULL REFERENCES outbox(id),state TEXT NOT NULL,reason TEXT NOT NULL,result_text TEXT,evidence_ref TEXT,at TEXT NOT NULL,PRIMARY KEY(outbox_id,state))",
+"CREATE TABLE delivery_worker(id INTEGER PRIMARY KEY CHECK(id=1),sender TEXT NOT NULL,heartbeat TEXT NOT NULL,last_error TEXT)"
+]
