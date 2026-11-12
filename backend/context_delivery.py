@@ -238,7 +238,7 @@ def serve_worker(store, transport, limit=20, interval=2, stop=None):
             error='delivery_worker_unavailable'
         with store.db() as db:
             db.execute('INSERT OR REPLACE INTO delivery_worker VALUES(1,?,?,?)',(transport.source,now(),error))
-        retry_error=error == 'delivery_worker_unavailable' or 'pending' in states
+        retry_error=error is not None  # Includes failed exact-key lookups and unresolved unknown effects.
         delay=min(60,max(interval,delay*2)) if retry_error else interval
         stop.wait(delay)
 

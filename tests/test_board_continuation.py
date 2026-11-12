@@ -203,6 +203,27 @@ class ContinuationTests(unittest.TestCase):
         self.transport.rows['qitem-synthetic-original']['tags']=['project:other']
         self.failure('original_obligation_not_owned',lambda:self.report(outbox,'accepted'))
 
+    def test_unknown_reconciliation_backs_off_bounded_without_second_send(self):
+        # Complete unrelated seed delivery so only the ambiguous answer is retried.
+        deliver_one(self.store,Delivery(),self.request['delivery']['id'])
+        outbox=self.answer()['delivery']['id'];self.transport.mode='after'
+        self.assertEqual(deliver_one(self.store,self.transport,outbox),'unknown')
+        class CapturedWait:
+            def __init__(self):self.delays=[]
+            def is_set(self):return len(self.delays)>=7
+            def wait(self,delay):self.delays.append(delay)
+        for unavailable in (True,False):
+            with self.subTest(lookup_raises=unavailable):
+                def lookup(_):
+                    if unavailable:raise TimeoutError('synthetic reconciliation outage')
+                    return None  # Absence after unknown never permits replay either.
+                self.transport.lookup=lookup
+                stop=CapturedWait()
+                serve_worker(self.store,self.transport,interval=2,stop=stop)
+                self.assertEqual(stop.delays,[4,8,16,32,60,60,60])
+                self.assertEqual(self.transport.sends,1)
+                self.assertEqual(delivery_status(self.store)['backlog'].get('unknown'),1)
+
 
 class BoardOnlyHTTPTests(unittest.TestCase):
     def test_board_only_exact_scope_never_reaches_configured_sources(self):
