@@ -6,7 +6,7 @@ User correction `qitem-opentour-board-data-ownership-20261110` makes OpenTour th
 
 `python3 -m backend.server --auth-file /absolute/private/project-grants.json --board-db /absolute/private/opentour-board/board.sqlite3` starts the existing loopback service with its application store. Default DB: `~/.local/share/opentour/board/board.sqlite3`. A CRM reference remains optional and unchanged. No container, MariaDB change, new service or package is needed.
 
-DB paths inside the checkout, its original shared checkout (when running a worktree), or `.artifacts` are rejected. The immediate directory must be owned by this OS user and mode 700; newly created directories/files use 700/600. Non-private files/directories and symlink DB files are refused rather than changing owner permissions. Keep backups equally private, outside Git. Use SQLite's backup API for a consistent backup; do not copy a database during writes. The store uses foreign keys, `BEGIN IMMEDIATE` transactions, 5-second busy timeout, explicit connection closure and `PRAGMA user_version=2` migration (v1 tasks/messages/outbox are preserved); newer schemas fail closed. Host-local single-user storage is selected, not network-filesystem or multi-host deployment.
+DB paths inside the checkout, its original shared checkout (when running a worktree), or `.artifacts` are rejected. The immediate directory must be owned by this OS user and mode 700; newly created directories/files use 700/600. Non-private files/directories and symlink DB files are refused rather than changing owner permissions. Keep backups equally private, outside Git. Use SQLite's backup API for a consistent backup; do not copy a database during writes. The store uses foreign keys, `BEGIN IMMEDIATE` transactions, 5-second busy timeout, explicit connection closure and `PRAGMA user_version=3` migration (v1/v2 tasks/messages/outbox and prior request digests are preserved); newer schemas fail closed. Host-local single-user storage is selected, not network-filesystem or multi-host deployment.
 
 ## Explicit application permissions
 
@@ -45,15 +45,18 @@ Fixed destinations (stored from task section, never accepted from a message/brow
 | clients | `campaign-creative@opentour-rig` |
 | campaigns | `campaign-operator@opentour-rig` |
 
-The sender is the verified existing Developer seat `platform-developer@opentour-rig`; the local worker checks `rig whoami`. No sender or manager is invented. Run only when context delivery is authorized:
+The operational worker has an explicit declared local service mode:
 
 ```sh
-python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --deliver --limit 20
+python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --serve --service
+python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --status
 ```
 
-This is an explicit finite drain, not an auto-started loop or a second workflow controller. It uses local native queue create to deliver context, never human answer/resolve or a business action. No daemon credential/config file is read. Native endpoint is fixed loopback; redirects/proxies and arbitrary targets are disabled. Worker installation/scheduling and first real delivery remain operational follow-up; no live delivery was performed for the candidate.
+It declares opentour-board-service@opentour-rig through the daemon's supported body-only sourceSession route (CLI equivalent: queue create --source outside a managed seat). There is no X-OpenRig-Session header. Provenance is claimed:v1 attribution, **not authentication**, a real seat, a manager or native human authority. Service mode refuses managed-seat identity variables and seat headers. OS process ownership/private DB/grants plus loopback-only daemon access form the runtime trust boundary. DevOps owns the supervisor, persistent storage, restart/recovery and deployment. No arbitrary process is labelled Developer. Default seat mode still verifies actual Developer/DevOps identity for bounded diagnostics; --deliver is not the operational design.
 
-States are distinct: message `persistence=saved`; outbox `pending`, `delivered`, `failed`, `unknown`. `delivered` means the exact native context row was observed/accepted, not that an agent acted. Before network I/O the worker commits `unknown`; any concurrent/restarted worker performs only exact-ID reconciliation. It validates source, fixed destination, full persisted payload and delivery/project tags. A committed send followed by lost response reconciles to delivered without another send. An absent row after an unknown attempt stays unknown, because the original request may still commit. No queue/person-wide search or new task on retry. Proven local rejection before the first send is failed; remote errors/ambiguous responses are unknown. Failed rows and unresolved unknowns are retained for scoped technical investigation, never automatically rekeyed or blindly resent. If the process dies after marking unknown but before sending, this conservatively retains unknown; native execution is not claimed exactly once.
+The worker drains the existing outbox with bounded batches, restart-safe exact-ID reconciliation and backoff on actual lookup/worker errors. It records heartbeat and aggregate pending/delivered/failed/unknown plus processing backlog via --status; heartbeat readiness is separate from publication or manager activation. It creates fixed-role context work only, never native answer/resolve or business actions. No daemon credential/config is read. Fixed loopback transport disables redirects/proxies. Pending rows bind the actual sender and generated native body before any possible POST. The body includes trusted operational receive/report instructions and the immutable app payload as data. Keep the worker's installed source path available while its context commands are outstanding.
+
+States are distinct: saved message, pending/delivered/failed/unknown transport, received/accepted/needs_clarification/rejected/continued recipient processing. Delivered means the exact queue row was observed, not that an agent acted. Unknown effects reconcile sender, destination, full pinned body and delivery/project tags before any retry; absence after uncertainty never authorizes another POST. A failed GET before any send safely remains pending. A crash after intent but before send is conservatively unknown. No queue/person-wide lookup or new task key is invented on retry. The service does not own agent judgment or replace native execution custody.
 
 A recipient can use its own verified seat to access **only** its delivered context and record a durable `processing=received` receipt:
 
@@ -61,13 +64,13 @@ A recipient can use its own verified seat to access **only** its delivered conte
 python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --receive context_delivery_id
 ```
 
-The delivery ID is in the native `delivery:` tag. This prints the minimal task/message JSON and records recipient access; it is not completion, approval, or proof of useful continuation. Other seats/undelivered IDs are refused. It is a same-host trusted agent tool, not a browser identity service. Native execution reference is linked from the outbox; the business conversation is still read from this DB.
+The delivery ID is in the native `delivery:` tag. This prints the minimal task/message JSON (including current processing state) and records recipient access; it is not completion, approval, or proof of useful continuation. Other seats/undelivered IDs are refused. It is a same-host trusted agent tool, not a browser identity service. Native execution reference is linked from the outbox; the business conversation is still read from this DB.
 
 ## Validation and remaining scope
 
 Use `python3 -m unittest discover -s tests -p test_board_conversations.py -v` and `python3 tools/board_conversation_probe.py`. All provider/native delivery checks are synthetic, including a real local HTTP fake with commit followed by response loss. The browser probe uses a private task-owned DB/server/profile, verifies restart/retry/linkage/mobile/revocation and cleans them up. It writes a synthetic-only screenshot to `/tmp/opentour-board-conversation-synthetic.png` for local review; remove after viewing.
 
-No real manager binding, native human decision, live agent consumption, CRM write, campaign send, external prototype or deployment is proven. Administrator task creation is API-only in this finite slice. The list/history bounds are explicit; deeper history pagination and broader task lifecycle UI are follow-up, not inferred completion. Independent Code QA and affected System QA are required before merge. No infrastructure dependency beyond a private local directory and the existing Python/SQLite runtime was found.
+Synthetic tests do not prove real manager binding, native human decisions, actual agent continuation, CRM writes, send or publication. Actual agent continuation requires independent System QA on the exact candidate; publication is separately owned by DevOps. Administrator task creation is API-only in this finite slice. The list/history bounds are explicit; deeper history pagination and broader task lifecycle UI are follow-up, not inferred completion. Independent Code QA and affected System QA are required before merge. No infrastructure dependency beyond a private local directory and the existing Python/SQLite runtime was found.
 
 
 ## Typed client-to-task relation
@@ -81,3 +84,27 @@ Client detail joins only app tasks allowed by the current project/board/object g
 From either person or organization detail, related work opens the same persisted discussion in the existing dialog. Return to client rereads the client and restores its modal scroll and link focus; list filters, page and originating row remain in place. Stale links cannot bypass revoked task grants, and the error still offers return to client. Drafts remain keyed by the original app task. No manager identity, native action, provider write or live integration is implied.
 
 Focused verification: `python3 -m unittest discover -s tests -p test_client_task_links.py -v` and `python3 tools/client_task_link_probe.py`. These use temporary synthetic records/grants/DB/browser only. The full component suites are not required to repeat unchanged behavior; independent affected Code/System QA remains the next step.
+
+
+## v0.12 versioned answer and substantive continuation
+
+Administrator task creation accepts optional continuationRef naming the original native qitem; it never accepts arbitrary agent destinations. The recipient must actually own that original obligation in project:opentour before accepting/continuing an answer. This reference is execution linkage, not a second execution tracker, a gate resolver, or business authority. Existing tasks are not assigned guessed obligations.
+
+Message projection includes a stable version over immutable server-authored message identity/content/actor/time. Answers may submit replyVersion alongside replyTo; a supplied stale version fails409. Even compatibility clients that omit it are server-bound to the exact immutable request version in their outbox payload; the browser now supplies it explicitly. Actor/role come from server grants, never a body claim. Exact request-key replay remains stable after restart. Only one answer per request can be accepted; a comment cannot close a request. Insufficient input gets a precise needs_clarification receipt, not a guessed decision.
+
+After --receive, the actual addressed seat can report:
+
+```sh
+python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --report context_delivery_id --state accepted --reason 'The answer is sufficient for the original synthetic obligation.'
+python3 -m backend.context_delivery --board-db /absolute/private/opentour-board/board.sqlite3 --report context_delivery_id --state continued --reason 'Continued the original obligation.' --result-file /absolute/private/substantive-result.txt --evidence-ref qitem-original-obligation
+```
+
+Or report needs_clarification/rejected with a specific reason. Reporting verifies actual rig whoami, fixed destination, delivered/received state, request version and original project/owner. Service mode cannot report recipient processing. Continued requires accepted answer, substantive result and the original execution reference, currently in-progress/done. It records the recipient's substantive return; it is not inferred from ACK, queue delivery, comment save, an animation or native business completion. The agent continues work through its existing native custody and closes the delivery qitem after processing. Reports are transactional/idempotent; conflicting repeats409 and receipt timestamps survive restart. Re-receive never downgrades accepted/continued. Stage timestamps are actual saved/delivered/received/accepted/continued facts, not predicted timings.
+
+Atlas cards/history/panel project these receipts and reasons/results on refresh. Open drafts survive pending delivery/errors. Native decisions remain on the separate unavailable route. Legacy tasks without continuationRef can still save/read discussions but cannot falsely claim a linked original continuation.
+
+## Board-only test identity and prefix hosting
+
+For the reversible published QA task use boardOnly:true with one exact board.tasks ID, read/respond true, create false. Wildcard/empty boardOnly scopes are refused. Such grants cannot reach CRM, native projection or campaign adapters, even when a provider is configured. Atlas shows the scoped discussion and a clear restricted-source explanation. Existing read grants keep their previous behavior. Also omit --crm-credential-file from the isolated synthetic runtime. No real manager is provisioned; removing the test grant revokes it on the next request.
+
+The root-local default is unchanged. An explicit --public-base-url https://existing-host/opentour supports a prefix behind DevOps' HTTPS proxy: shell/style/API/preview paths share the configured prefix, Host and Origin are checked against explicit configuration plus loopback. No wildcard origins or forwarded-header trust; the backend still binds loopback. This does not authorize proxy credential use or prove publication. The raw daemon/CRM/backend must not be exposed directly.

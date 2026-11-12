@@ -1,10 +1,11 @@
 'use strict';
 
+const BASE_PATH=document.querySelector('meta[name=opentour-base]')?.content || '';
 const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
   trigger: null, poll: null, debounce: null, campaigns: null, campaignRequest: 0,
-  boardAccess: null, appTasks: [], appBusy: false, drafts: new Map(), role:null, panelOpen:false, panelTask:null, panelRequest:0, boardRender:0, boardAnimations:[], boardInterrupted:false, boardFocus:null };
+  boardAccess: null, sourceReads:true, appTasks: [], appBusy: false, drafts: new Map(), role:null, panelOpen:false, panelTask:null, panelRequest:0, boardRender:0, boardAnimations:[], boardInterrupted:false, boardFocus:null };
 const roles = {developer:'Разработка',devops:'Инфраструктура','qa-code':'Проверка кода','qa-system':'Проверка системы',
   engineer:'Данные',creative:'Креатив',designer:'Дизайн',operator:'Оператор',lead:'Координация'};
 const columnLabels = {planned:'Запланировано',in_progress:'В работе',needs_human:'Требуется человек',review:'На проверке',done:'Выполнено',unknown:'Неизвестно'};
@@ -35,7 +36,7 @@ async function api(path, options={}) {
     const headers = {Authorization: `Bearer ${state.token}`};
     if (options.etag) headers['If-None-Match'] = options.etag;
     if (options.body) headers['Content-Type']='application/json';
-    const response = await fetch(path, {method:options.body ? 'POST' : 'GET', body:options.body ? JSON.stringify(options.body) : undefined, headers, cache:'no-store', credentials:'omit', signal:controller.signal});
+    const response = await fetch(BASE_PATH+path, {method:options.body ? 'POST' : 'GET', body:options.body ? JSON.stringify(options.body) : undefined, headers, cache:'no-store', credentials:'omit', signal:controller.signal});
     if (response.status === 304) return {unchanged:true};
     const data = await response.json();
     if (!response.ok) {
@@ -88,7 +89,8 @@ $('connect-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/capabilities').then(({data}) => {
       if (session !== state.session) return;
-      state.boardAccess=data.boardConversations || null;state.role=data.role;
+      state.boardAccess=data.boardConversations || null;state.sourceReads=data.sourceReads!==false;state.role=data.role;
+      for(const el of document.querySelectorAll('#board,#tasks-view .mission-banner,#tasks-view .section-toolbar,#tasks-view .view-footnote')) el.hidden=!state.sourceReads;
       $('session-role').textContent=data.role === 'administrator' ? 'Администратор' : 'Пользователь';
       $('access-mode').textContent=state.boardAccess?.respond ? 'Ответы в задачах' : 'Только чтение';
       $('synthetic-banner').hidden=data.dataMode !== 'synthetic';
@@ -119,12 +121,15 @@ function showView(view) {
   $('page-title').textContent=({tasks:'Работа команды',clients:'Клиенты',campaigns:'Кампании'})[view];
   $('page-eyebrow').textContent=({tasks:'ОБЩАЯ ДОСКА',clients:'КЛИЕНТСКАЯ БАЗА',campaigns:'ЛОКАЛЬНЫЙ ПРЕДПРОСМОТР'})[view];
   $('page-description').textContent=({tasks:'Текущий план, результаты и следующие шаги.',clients:'Физические лица и организации. Данные из вашей CRM.',campaigns:'Один пакет, все материалы и условия — без отправки.'})[view];
+  if(!state.sourceReads && view!=='tasks') {
+    $(view==='clients' ? 'client-list' : 'campaign-list').replaceChildren(stateBox('Доступны обсуждения задач','Доступ к данным этого раздела для текущего аккаунта не выдан.'));return;
+  }
   if (state.token && view === 'clients' && !state.clients) loadClients();
   if (state.token && view === 'campaigns' && !state.campaigns) loadCampaigns();
 }
 for (const el of document.querySelectorAll('[data-view]')) el.addEventListener('click', () => showView(el.dataset.view));
 document.querySelector('.brand').addEventListener('click',(event) => {event.preventDefault();showView('tasks');});
-$('refresh').addEventListener('click', () => state.view === 'tasks' ? loadBoard() : state.view === 'clients' ? loadClients() : loadCampaigns());
+$('refresh').addEventListener('click', () => !state.sourceReads && state.view!=='tasks' ? showView(state.view) : state.view === 'tasks' ? loadBoard() : state.view === 'clients' ? loadClients() : loadCampaigns());
 $('work-filter').addEventListener('change', () => renderBoard(false));
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden) {state.boardInterrupted=true;if(state.token && state.board) renderBoard(false);else cancelBoardMotion();}
@@ -140,7 +145,7 @@ function cancelBoardMotion() {
 }
 function updateWorkCount() {
   const native=state.board?.items?.length || 0;
-  $('nav-work-count').textContent=state.board ? native+state.appTasks.length : '—';
+  $('nav-work-count').textContent=state.board || !state.sourceReads ? native+state.appTasks.length : '—';
 }
 async function renderBoard(motion=true) {
   if (!state.board || !state.token) return;
@@ -198,7 +203,7 @@ async function renderBoard(motion=true) {
 
 async function loadBoard(quiet=false) {
   if (state.boardAccess?.read) loadAppTasks();
-  if (!state.token || state.boardBusy) return;
+  if (!state.token || state.boardBusy || !state.sourceReads) return;
   state.boardBusy=true; const session=state.session;
   if (!state.board) loadingBoard();
   try {
@@ -247,6 +252,7 @@ function fixtureLabels(labels) {
   const row=node('div','fixture-labels');for (const label of labels) row.append(node('span','',label));return row;
 }
 async function loadCampaigns() {
+  if(!state.sourceReads) return;
   if (!state.token) return;
   const request=++state.campaignRequest,session=state.session;
   $('campaign-list').setAttribute('aria-busy','true');$('campaign-list').replaceChildren(node('div','skeleton'));
@@ -291,6 +297,7 @@ function renderClients() {
   $('previous-page').disabled=state.offset === 0;$('next-page').disabled=data.nextOffset === null;state.nextOffset=data.nextOffset;
 }
 async function loadClients() {
+  if(!state.sourceReads) return;
   if (!state.token) return;
   const request=++state.clientRequest,session=state.session;
   $('nav-client-count').textContent='—';
@@ -452,7 +459,7 @@ function renderCampaignDetail(item) {
   const facts=node('div','campaign-facts');facts.append(metadata([['Канал','Email · предпросмотр'],['Аудитория','Не выбрана · число получателей недоступно'],['Отправитель','Не настроен'],['Сервис рассылок','Не подключён · provider ID отсутствует']]));root.append(facts);
   const tabs=node('div','preview-switch');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','Формат материала');
   const preview=node('div','email-preview-panel');
-  const frame=node('iframe','email-preview-frame');frame.title='Предпросмотр письма — FIXTURE, не утверждено и не отправлено';frame.setAttribute('sandbox','');frame.setAttribute('referrerpolicy','no-referrer');frame.srcdoc=item.previewDocument;preview.append(frame);
+  const frame=node('iframe','email-preview-frame');frame.title='Предпросмотр письма — FIXTURE, не утверждено и не отправлено';frame.setAttribute('sandbox','');frame.setAttribute('referrerpolicy','no-referrer');frame.srcdoc=item.previewDocument.replaceAll('href="/ui/','href="'+BASE_PATH+'/ui/');preview.append(frame);
   const text=node('pre','campaign-source',item.plainText);text.hidden=true;
   const manifest=node('div','campaign-manifest');manifest.hidden=true;
   manifest.append(node('p','detail-note','Исходный манифест r01 сохранён без изменений. Описания прежнего состояния приложения — исторические, а не текущий статус интеграции.'),node('pre','campaign-source',item.manifest));
@@ -536,7 +543,7 @@ async function loadAppTasks() {
     const items=document.createDocumentFragment();
     for (const item of data.items) {
       const card=button('',() => openDetails('app',item.id,card),'task-card');card.dataset.objectId=item.id;
-      card.append(node('span','task-kind','Обсуждение · OpenTour'),node('h3','',item.title),node('p','',item.description));items.append(card);
+      card.append(node('span','task-kind','Обсуждение · OpenTour'),node('h3','',item.title),node('p','',item.description),node('p','app-processing-status',processingLabels[item.requestState] || 'Ожидается ответ'));items.append(card);
     }
     if (!data.items.length) items.append(node('p','','Доступных обсуждений пока нет.'));
     if (!data.complete) items.append(node('p','','Показана часть доступных задач.'));
@@ -548,6 +555,7 @@ async function loadAppTasks() {
   } finally {if (session === state.session) state.appBusy=false;}
 }
 const deliveryLabels={pending:'Ожидает доставки агенту',delivered:'Контекст доставлен в очередь агента',failed:'Доставка отклонена до отправки',unknown:'Результат доставки неизвестен — требуется сверка'};
+const processingLabels={unconfirmed:'Обработка агентом: не подтверждена',awaiting_answer:'Ожидается ответ на запрос',comment_only:'Комментарий сохранён; запрос не закрыт',saved:'Ответ сохранён',pending:'Ожидает доставки',delivered:'Доставлено агенту',received:'Контекст получен агентом',accepted:'Ответ принят агентом',continued:'Работа продолжена',needs_clarification:'Нужно уточнение',rejected:'Ответ отклонён',failed:'Доставка отклонена',unknown:'Результат доставки неизвестен'};
 function renderAppTask(item) {
   if(state.modal?.kind==='app' && state.modal.id===item.id) state.modal.version=item.version;
   const wasInput=document.activeElement?.id==='app-response-text';const caret=wasInput ? [document.activeElement.selectionStart,document.activeElement.selectionEnd] : null;
@@ -563,7 +571,9 @@ function renderAppTask(item) {
     entry.append(node('h3','',({request:'Запрос',answer:'Ответ',comment:'Комментарий'})[message.kind]),node('p','message-body',message.body));
     if (message.reply_to) {const request=item.messages.find(m => m.id === message.reply_to);entry.append(node('p','detail-note','Ответ на запрос: '+(request ? request.body : 'Предыдущий запрос этой задачи')));}
     entry.append(node('p','detail-note','Сохранено · '+(deliveryLabels[message.delivery.state] || 'Доставка не подтверждена')),
-      node('p','detail-note','Обработка агентом: '+(message.delivery.processing === 'received' ? 'получение контекста подтверждено' : 'не подтверждена')));
+      node('p','detail-note',processingLabels[message.delivery.processing] || processingLabels.unconfirmed));
+    if(message.delivery.reason) entry.append(node('p','detail-note',message.delivery.reason));
+    if(message.delivery.result) entry.append(node('p','message-body',message.delivery.result));
     history.append(entry);
   }
   if (!item.historyComplete) history.append(node('p','','Показаны последние 100 сообщений; история неполная.'));
@@ -578,17 +588,18 @@ function renderAppTask(item) {
     for (const message of item.messages.filter(m => m.kind === 'request')) {const option=node('option','','Ответить: '+message.body.slice(0,100));option.value=message.id;target.append(option);}
     if (draft.replyTo && ![...target.options].some(option => option.value === draft.replyTo)) {const earlier=node('option','','Ответ на предыдущий запрос задачи');earlier.value=draft.replyTo;target.append(earlier);}
     target.value=draft.replyTo;
+    draft.replyVersion=item.messages.find(m=>m.id===draft.replyTo)?.version || draft.replyVersion;
     const input=node('textarea');input.id='app-response-text';input.maxLength=4000;input.required=true;input.value=draft.text;
     const status=node('p','connection-status');status.setAttribute('role','status');
     const submit=node('button','primary-button',draft.frozen ? 'Повторить сохранение' : 'Сохранить ответ');submit.type='submit';
     submit.disabled=!!draft.saving;
     if (draft.frozen) {input.readOnly=true;target.disabled=true;status.textContent='Сохранение пока не подтверждено. Повтор использует тот же запрос и не дублирует сообщение.';}
     input.addEventListener('input',() => {draft.text=input.value;});
-    target.addEventListener('change',() => {draft.replyTo=target.value;});
+    target.addEventListener('change',() => {draft.replyTo=target.value;draft.replyVersion=item.messages.find(m=>m.id===draft.replyTo)?.version;});
     form.addEventListener('submit',async event => {
       event.preventDefault();if(submit.disabled || draft.saving) return;draft.saving=true;
       const session=state.session;
-      if (!draft.frozen) {draft.requestId=crypto.randomUUID();draft.frozen={requestId:draft.requestId,kind:draft.replyTo ? 'answer' : 'comment',text:draft.text,...(draft.replyTo ? {replyTo:draft.replyTo} : {})};}
+      if (!draft.frozen) {draft.requestId=crypto.randomUUID();draft.frozen={requestId:draft.requestId,kind:draft.replyTo ? 'answer' : 'comment',text:draft.text,...(draft.replyTo ? {replyTo:draft.replyTo,replyVersion:draft.replyVersion} : {})};}
       submit.disabled=true;input.readOnly=true;target.disabled=true;status.textContent='Сохраняем…';
       try {
         await api('/api/board-tasks/'+encodeURIComponent(item.id)+'/messages',{body:draft.frozen});
@@ -598,9 +609,9 @@ function renderAppTask(item) {
       } catch(error) {
         if (session !== state.session) return;
         if (error.status === 401 || error.status === 403) {resetSession(errorText(error));return;}
-        if ([400,413,415].includes(error.status)) {
+        if ([400,409,413,415].includes(error.status)) {
           draft.frozen=null;draft.requestId=null;input.readOnly=false;target.disabled=false;
-          status.textContent='Ответ не сохранён. Исправьте текст и попробуйте снова.';submit.textContent='Сохранить ответ';
+          status.textContent=error.status===409 ? 'Запрос изменён или ответ уже принят. Обновите обсуждение; текст сохранён.' : 'Ответ не сохранён. Исправьте текст и попробуйте снова.';submit.textContent='Сохранить ответ';
         } else {status.textContent='Сохранение не подтверждено. Текст сохранён в этой вкладке. Повторите тот же запрос.';submit.textContent='Повторить сохранение';}
       } finally {draft.saving=false;submit.disabled=false;}
     });
@@ -635,7 +646,7 @@ function updateAtlasContext(object) {
     for(const message of task.messages) {
       const entry=node('div','message '+(message.kind==='request' ? 'agent' : 'user'));
       entry.append(node('span','author',message.author_role==='administrator' ? 'Администратор' : 'Пользователь'),node('p','message-body',message.body));
-      entry.append(node('p','field-hint',deliveryLabels[message.delivery.state] || 'Доставка не подтверждена'));
+      entry.append(node('p','field-hint',deliveryLabels[message.delivery.state] || 'Доставка не подтверждена'),node('p','field-hint',processingLabels[message.delivery.processing] || processingLabels.unconfirmed));
       $('messages').append(entry);
     }
     const open=button('Открыть обсуждение задачи',()=>{const narrow=matchMedia('(max-width:700px)').matches;if(narrow) setAtlasPanel(false);openDetails('app',task.id,narrow ? $('dialog-toggle') : open);});

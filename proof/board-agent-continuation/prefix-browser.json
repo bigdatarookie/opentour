@@ -1,0 +1,18 @@
+{
+  "mode": "SYNTHETIC ONLY",
+  "actual_agent": false,
+  "prefix": true,
+  "passed": 7,
+  "checks": [
+    "board_only_discussion_usable_no_source_board",
+    "source_section_explains_restricted_access",
+    "double_submit_one_saved_answer",
+    "delivered_distinct_from_received",
+    "accepted_updates_modal_and_card",
+    "substantive_fixture_return_visible",
+    "reload_reads_durable_state"
+  ],
+  "crm_access": false,
+  "native_queue_access": false,
+  "fixture_answer_count": 1
+}

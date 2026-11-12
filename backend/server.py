@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,10 +33,19 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
     campaign = campaign or FixtureCampaign()
+    prefix,public_origin,public_host='','',''
+    if public_base_url:
+        public=urllib.parse.urlsplit(public_base_url)
+        prefix=public.path.rstrip('/')
+        if (public.scheme!='https' or not re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]{1,5})?',public.netloc)
+                or public.query or public.fragment or (prefix and not re.fullmatch(r'(?:/[A-Za-z0-9_-]+)+',prefix))):
+            raise ValueError('invalid_public_base_url')
+        public_host=public.netloc.lower()
+        public_origin='https://'+public_host
     class Handler(BaseHTTPRequestHandler):
         server_version = 'OpenTourLocal'
 
@@ -62,6 +72,10 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
             else:
                 filename, content_type = UI_FILES[path]
                 raw = (STATIC / filename).read_bytes()
+                if filename=='index.html':
+                    raw=raw.replace(b'name="opentour-base" content=""',('name="opentour-base" content="'+prefix+'"').encode())
+                if prefix and content_type.startswith(('text/html','text/css')):
+                    raw=raw.replace(b'"/ui/',('"'+prefix+'/ui/').encode()).replace(b"'/ui/",("'"+prefix+'/ui/').encode())
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(raw)))
@@ -76,15 +90,18 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
         def handle_request(self):
             try:
                 allowed = {'127.0.0.1:' + str(self.server.server_port), 'localhost:' + str(self.server.server_port)}
+                if public_host:allowed.add(public_host)
                 if len(self.headers.get_all('Host', [])) != 1 or self.headers.get('Host') not in allowed:
                     raise Failure('host_forbidden', 403)
                 origin = self.headers.get('Origin')
-                if origin and origin not in {'http://' + h for h in allowed}:
+                if origin and origin not in ({'http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port)} | ({public_origin} if public_origin else set())):
                     raise Failure('origin_forbidden', 403)
                 url = urllib.parse.urlsplit(self.path)
                 if url.scheme or url.netloc or len(self.path) > 4096:
                     raise Failure('invalid_request', 400)
                 path = urllib.parse.unquote(url.path)
+                if prefix and (path==prefix or path.startswith(prefix+'/')):
+                    path=path[len(prefix):] or '/'
                 if self.command == 'GET' and (path in UI_FILES or path == '/ui/campaign-email.css') and not url.query:
                     # Public shell has no embedded data, tokens, source URLs or private files.
                     return self.ui_file(path)
@@ -98,6 +115,8 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                 if params.get('project', PROJECT) != PROJECT:
                     raise Failure('project_forbidden', 403)
                 params.pop('project', None)
+                if principal.board_only and path != '/api/capabilities' and path != '/api/board-tasks' and not path.startswith('/api/board-tasks/'):
+                    raise Failure('board_only_source_access_forbidden',403)
                 if path == '/api/board-tasks' or path.startswith('/api/board-tasks/'):
                     if not board_store:
                         raise Failure('board_store_not_configured', 503)
@@ -127,7 +146,7 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                     # Only OpenTour conversation writes are exposed; native decisions remain closed.
                     raise Failure(WRITE_LIMITATION, 403)
                 elif path == '/api/capabilities' and not params:
-                    data = {'project': PROJECT, 'role': principal.role, 'reads': ['clients', 'board', 'campaigns'], 'dataMode': data_mode,
+                    data = {'project': PROJECT, 'sourceReads': not principal.board_only, 'role': principal.role, 'reads': ['board-tasks'] if principal.board_only else ['clients', 'board', 'campaigns'], 'dataMode': data_mode,
                             'writes': {'enabled': False, 'scope': 'native_actions', 'reason': WRITE_LIMITATION},
                             'dialogue': {'enabled': False, 'reason': WRITE_LIMITATION},
                             'boardConversations': {'read': bool(board_store and principal.board_read),
@@ -195,11 +214,12 @@ def main():
     parser.add_argument('--crm-credential-file', type=Path, help='Private JSON containing read-only EspoCRM API key')
     parser.add_argument('--board-db', type=Path, default=Path.home() / '.local/share/opentour/board/board.sqlite3',
                         help='Private OpenTour application DB outside checkout/.artifacts')
+    parser.add_argument('--public-base-url',help='Explicit HTTPS origin/prefix behind a trusted proxy; backend stays loopback')
     parser.add_argument('--work-root', type=Path, help='Existing registered OpenTour work root for native read projection')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(args.work_root or root / 'opentour-rig', MISSION))
-    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db)) as server:
+    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()
 

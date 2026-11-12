@@ -52,12 +52,17 @@ class RelationTests(unittest.TestCase):
         task = self.create(ref=None)
         with self.store.db() as db:
             db.execute('DROP TABLE task_clients')
+            for table in ('processing_events','delivery_worker','task_execution'):
+                db.execute('DROP TABLE '+table)
+            for column in ('sender','native_body','delivered_at','received_at','accepted_at','continued_at','processing_reason','result_text','evidence_ref'):
+                db.execute('ALTER TABLE outbox DROP COLUMN '+column)
             db.execute('PRAGMA user_version=1')
-            before = {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in ('tasks','messages','outbox','requests')}
+            columns={name:[r['name'] for r in db.execute('PRAGMA table_info('+name+')')] for name in ('tasks','messages','outbox','requests')}
+            before={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         store = BoardStore(self.path)
         with store.db() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 2)
-            after = {name: [tuple(r) for r in db.execute('SELECT * FROM ' + name)] for name in before}
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            after={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         self.assertEqual(before, after)
         self.assertIsNone(store.detail(USER, task['id'])['clientRef'])
         self.assertEqual(store.related(USER, CONTACT)['items'], [])
