@@ -56,7 +56,7 @@ def main():
             if result.returncode:
                 raise RuntimeError('synthetic_static_api_probe_failed '+args[0]+': '+(result.stderr+result.stdout).replace(token,'[redacted]')[:500])
             return result.stdout
-        def js(script):return run('eval','--stdin',script=script)
+        def js(script):return run('eval','--stdin',script='(async () => {'+script+'})()')
         def check(name,expression):
             js('if(!('+expression+'))throw new Error('+json.dumps(name)+');true;');checks.append(name)
         def login():
