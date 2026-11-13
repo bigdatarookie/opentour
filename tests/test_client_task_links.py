@@ -52,6 +52,7 @@ class RelationTests(unittest.TestCase):
         task = self.create(ref=None)
         with self.store.db() as db:
             db.execute('DROP TABLE task_clients')
+            db.execute('ALTER TABLE outbox DROP COLUMN routing_ref')
             for table in ('processing_events','delivery_worker','task_execution'):
                 db.execute('DROP TABLE '+table)
             for column in ('sender','native_body','delivered_at','received_at','accepted_at','continued_at','processing_reason','result_text','evidence_ref'):
@@ -61,7 +62,7 @@ class RelationTests(unittest.TestCase):
             before={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         store = BoardStore(self.path)
         with store.db() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             after={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         self.assertEqual(before, after)
         self.assertIsNone(store.detail(USER, task['id'])['clientRef'])

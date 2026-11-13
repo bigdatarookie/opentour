@@ -8,7 +8,7 @@ import threading
 import subprocess
 import urllib.request
 from pathlib import Path
-from .adapters import Failure, JsonGET
+from .adapters import Failure, JsonGET, NativeObligation
 from .board_store import BoardStore, DESTINATIONS, text
 from .core import now
 
@@ -63,6 +63,10 @@ class NativeContext:
                 return None
             raise
 
+    def validate_destination(self, row, continued=False):
+        states = ('in-progress','done') if continued else ('pending','in-progress','blocked')
+        return NativeObligation(client=self.client).resolve(row['routing_ref'], row['destination'], states)
+
     def send(self, row):
         data = {'qitemId': row['native_id'], 'destinationSession': row['destination'],
                 'body': row.get('native_body') or PREFIX + row['payload'], 'summary': 'OpenTour saved task context',
@@ -110,7 +114,15 @@ def deliver_one(store, transport, outbox_id):
     state, error = 'unknown', 'delivery_effect_unknown'
     send_started=False
     try:
-        if row['destination'] not in DESTINATIONS.values():
+        if row.get('routing_ref'):
+            if first:
+                try:
+                    transport.validate_destination(row)
+                except Failure as exc:
+                    if exc.status in (400,403,404,409):
+                        raise Rejected('original_obligation_no_longer_valid') from None
+                    raise
+        elif row['destination'] not in DESTINATIONS.values():
             raise Rejected('destination_not_authorized')
         existing = transport.lookup(row['native_id'])
         if existing is not None:
@@ -178,6 +190,7 @@ def report_context(store, outbox_id, session, state, reason, result=None, eviden
             if (prior['reason'],prior['result_text'],prior['evidence_ref']) != (reason,result,evidence):
                 raise Failure('processing_receipt_conflict',409)
             return {'processing':found['processing'],'replayed':True}
+        routing_ref=found['routing_ref']
         payload=json.loads(found['payload'])
         if state in ('accepted','continued') and payload.get('kind') == 'answer':
             parent=db.execute('SELECT * FROM messages WHERE id=? AND task_id=?',(payload.get('replyTo'),payload['taskId'])).fetchone()
@@ -187,6 +200,13 @@ def report_context(store, outbox_id, session, state, reason, result=None, eviden
         obligation=payload.get('continuationRef')
         if not obligation or not transport:
             raise Failure('original_obligation_required',409)
+        if routing_ref:
+            try:
+                transport.validate_destination(dict(found), continued=state=='continued')
+            except Failure as exc:
+                if exc.status in (400,403,404,409):
+                    raise Failure('original_obligation_not_owned',409) from None
+                raise
         native=transport.lookup(obligation)
         if not native or 'project:opentour' not in (native.get('tags') or []) or any(t.startswith('project:') and t!='project:opentour' for t in (native.get('tags') or [])) or native.get('destinationSession') != session or native.get('state') not in (('pending','in-progress','blocked') if state == 'accepted' else ('in-progress','done')):
             raise Failure('original_obligation_not_owned',409)
