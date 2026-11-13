@@ -15,8 +15,12 @@ def deployment_url(value, *, origin_only=False):
             or url.scheme not in ('https', 'http')
             or (url.scheme == 'http' and url.hostname not in ('127.0.0.1', 'localhost'))):
         raise ValueError('invalid_deployment_url')
-    if url.port is not None and not 1 <= url.port <= 65535:
-        raise ValueError('invalid_deployment_url')
+    if url.port is not None:
+        # Browser URL/Origin serialization drops default ports and leading zeroes.
+        # Reject those spellings before generating metadata or an Origin allowlist.
+        if (not 1 <= url.port <= 65535 or str(url.port) != url.netloc.rsplit(':', 1)[1]
+                or url.port == {'https': 443, 'http': 80}[url.scheme]):
+            raise ValueError('invalid_deployment_url')
     prefix = url.path.rstrip('/')
     if (prefix and not re.fullmatch(r'(?:/[A-Za-z0-9_-]+)+', prefix)) or (origin_only and url.path):
         raise ValueError('invalid_deployment_url')

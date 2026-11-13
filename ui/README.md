@@ -148,7 +148,10 @@ python3 tools/build_static_ui.py --output /private/tmp/opentour-public-ui --base
 
 `OPENTOUR_PROTECTED_API_BASE` is an operator-supplied protected **HTTPS** base,
 including any forwarding prefix, without `/api`, userinfo, query, fragment or
-credentials. No production host is supplied by this repository. Literal
+credentials. Explicit default ports (`https:443`, loopback `http:80`) and
+zero-padded port spellings are rejected by both the exporter and UI-origin
+configuration; omit default ports and use ordinary decimal non-default ports.
+No production host is supplied by this repository. Literal
 `http://127.0.0.1:PORT` / `http://localhost:PORT` are accepted only for disposable
 local validation; the browser permits these only when the UI is also loopback.
 Never publish a loopback target as a production artifact. The Pages artifact root

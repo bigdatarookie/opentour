@@ -89,6 +89,24 @@ class StaticAPITests(unittest.TestCase):
             self.assertEqual({str(p.relative_to(out)) for p in out.rglob('*') if p.is_file()}, {'index.html','.nojekyll','ui/app.js','ui/styles.css','ui/atlas.css','ui/assets/Prata-Regular.ttf','ui/assets/Commissioner.ttf','ui/campaign-email.css'})
             with self.assertRaises(FileExistsError):build(out,'https://protected.example.invalid/bridge')
 
+    def test_default_and_padded_ports_rejected_before_export_or_cors_setup(self):
+        for origin in ('https://api.example.invalid:443', 'https://bigdatarookie.github.io:443',
+                       'http://127.0.0.1:80', 'http://localhost:80',
+                       'https://api.example.invalid:0443', 'http://127.0.0.1:08083'):
+            with self.subTest(origin=origin, boundary='api'), self.assertRaises(ValueError):
+                deployment_url(origin+'/bridge')
+            with self.subTest(origin=origin, boundary='ui-origin'), self.assertRaises(ValueError):
+                deployment_url(origin, origin_only=True)
+            with self.subTest(origin=origin, boundary='export'), tempfile.TemporaryDirectory() as tmp:
+                out=Path(tmp)/'public'
+                with self.assertRaises(ValueError):build(out,origin+'/bridge')
+                self.assertFalse(out.exists())
+            with self.subTest(origin=origin, boundary='server'), self.assertRaises(ValueError):
+                with make_server(object(),Auth(grants=[]),0,allowed_ui_origins=[origin]):pass
+        for value in ('https://api.example.invalid/bridge', 'https://api.example.invalid:8443/bridge',
+                      'http://127.0.0.1:18084/bridge'):
+            self.assertEqual(deployment_url(value),value)
+
     def test_config_rejects_wildcards_paths_secrets_and_unsafe_transport(self):
         for value in ('*','null','https://*.example.invalid','https://user:pass@example.invalid',
                       'https://example.invalid?token=secret','https://example.invalid/#token',
