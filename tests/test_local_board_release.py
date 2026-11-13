@@ -4,6 +4,7 @@ import io
 import os
 import plistlib
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -157,10 +158,19 @@ class LocalBoardReleaseTests(unittest.TestCase):
             archive_stream = io.BytesIO()
             with tarfile.open(fileobj=archive_stream, mode="w") as archive:
                 payload = b"synthetic fixture\n"
+                directory = tarfile.TarInfo("bin")
+                directory.type = tarfile.DIRTYPE
+                directory.mode = 0o755
+                archive.addfile(directory)
                 member = tarfile.TarInfo("app.py")
                 member.mode = 0o644
                 member.size = len(payload)
                 archive.addfile(member, io.BytesIO(payload))
+                executable = tarfile.TarInfo("bin/run")
+                executable.mode = 0o755
+                executable_payload = b"#!/bin/sh\nexit 0\n"
+                executable.size = len(executable_payload)
+                archive.addfile(executable, io.BytesIO(executable_payload))
             archive_stream.seek(0)
 
             class ArchiveProcess:
@@ -192,6 +202,10 @@ class LocalBoardReleaseTests(unittest.TestCase):
             self.assertEqual(receipt["commit"], revision)
             self.assertEqual(receipt["tree"], expected_tree)
             self.assertEqual((release / "app.py").read_text(encoding="utf-8"), "synthetic fixture\n")
+            self.assertEqual(stat.S_IMODE((release / "app.py").stat().st_mode), 0o444)
+            self.assertEqual(stat.S_IMODE((release / "bin/run").stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE((release / "bin").stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(release.stat().st_mode), 0o555)
             self.assertFalse((release / ".git").exists())
 
 

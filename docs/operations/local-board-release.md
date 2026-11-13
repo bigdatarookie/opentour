@@ -12,7 +12,7 @@ Run activation only after the separate `auth:local-runtime-upgrade` gate is reso
 
 ## Prepare and rehearse
 
-1. Stage the exact merged commit into a new immutable version directory. Do not copy a dirty checkout:
+1. Stage the exact merged commit into a new version directory. The helper removes write bits from staged files and directories after archive verification (preserving executable bits); do not copy a dirty checkout:
 
    ```sh
    python3 tools/local_board_release.py stage \

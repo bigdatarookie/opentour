@@ -194,6 +194,42 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _make_release_readonly(root: Path, seal_root: bool = True) -> None:
+    """Remove write bits from staged files/directories while preserving execution."""
+    entries = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+    for path in entries:
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if stat.S_ISDIR(info.st_mode):
+            os.chmod(path, 0o555)
+        elif stat.S_ISREG(info.st_mode):
+            os.chmod(path, mode & ~0o222)
+        else:
+            raise ReleaseError("staged_release_contains_unsupported_file")
+    if seal_root:
+        os.chmod(root, 0o555)
+
+
+def _remove_staging_tree(root: Path) -> None:
+    """Make a partially sealed staging tree removable, then discard it."""
+    if not root.exists():
+        return
+    entries = list(root.rglob("*"))
+    for path in entries:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                os.chmod(path, 0o700)
+            else:
+                os.chmod(path, 0o600)
+        except OSError:
+            pass
+    try:
+        os.chmod(root, 0o700)
+    except OSError:
+        pass
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def backup_database(database: Path, backup_dir: Path) -> tuple[Path, Path, dict]:
     """Make a consistent, mode-0600 SQLite snapshot and private metadata sidecar."""
     database = _private_file(database.expanduser().absolute())
@@ -397,13 +433,18 @@ def stage_release(repo: Path, revision: str, release_root: Path) -> tuple[Path, 
         status = proc.wait()
         if status:
             raise ReleaseError("git_archive_failed")
+        # Keep the staging root writable until the atomic directory rename; on
+        # macOS rename requires write access to the source directory itself.
+        _make_release_readonly(temp, seal_root=False)
         os.replace(temp, destination)
+        temp = destination
+        os.chmod(temp, 0o555)
         _fsync_dir(release_root)
     except BaseException:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-        shutil.rmtree(temp, ignore_errors=True)
+        _remove_staging_tree(temp)
         raise
     return destination, {"commit": commit, "tree": tree, "archive_stderr_bytes": len(stderr)}
 
