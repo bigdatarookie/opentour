@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import os
 import plistlib
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from backend.board_store import BoardStore
 from tools.local_board_release import (
@@ -149,17 +152,43 @@ class LocalBoardReleaseTests(unittest.TestCase):
             root = Path(raw)
             source = root / "source"
             source.mkdir()
-            subprocess.run(["git", "init", "-q", str(source)], check=True)
-            subprocess.run(["git", "-C", str(source), "config", "user.name", "Synthetic"], check=True)
-            subprocess.run(["git", "-C", str(source), "config", "user.email", "synthetic@example.invalid"], check=True)
-            (source / "app.py").write_text("synthetic fixture\n", encoding="utf-8")
-            subprocess.run(["git", "-C", str(source), "add", "app.py"], check=True)
-            subprocess.run(["git", "-C", str(source), "commit", "-qm", "synthetic"], check=True)
-            revision = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"],
-                                      capture_output=True, text=True, check=True).stdout.strip()
-            release, receipt = stage_release(source, revision, root / "release-root")
-            expected_tree = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD^{tree}"],
-                                           capture_output=True, text=True, check=True).stdout.strip()
+            revision = "0123456789abcdef0123456789abcdef01234567"
+            expected_tree = "89abcdef0123456789abcdef0123456789abcdef"
+            archive_stream = io.BytesIO()
+            with tarfile.open(fileobj=archive_stream, mode="w") as archive:
+                payload = b"synthetic fixture\n"
+                member = tarfile.TarInfo("app.py")
+                member.mode = 0o644
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+            archive_stream.seek(0)
+
+            class ArchiveProcess:
+                stdout = archive_stream
+                stderr = io.BytesIO()
+
+                def wait(self):
+                    return 0
+
+                def poll(self):
+                    return 0
+
+                def kill(self):
+                    raise AssertionError("successful archive process must not be killed")
+
+            def git_result(command, **kwargs):
+                if command[-1] == f"{revision}^{{commit}}":
+                    return subprocess.CompletedProcess(command, 0, revision, "")
+                if command[-1] == f"{revision}^{{tree}}":
+                    return subprocess.CompletedProcess(command, 0, expected_tree, "")
+                raise AssertionError(f"unexpected git command: {command}")
+
+            with mock.patch("tools.local_board_release.subprocess.run", side_effect=git_result) as run, \
+                    mock.patch("tools.local_board_release.subprocess.Popen", return_value=ArchiveProcess()) as popen:
+                release, receipt = stage_release(source, revision, root / "release-root")
+
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(popen.call_args.args[0][-1], revision)
             self.assertEqual(receipt["commit"], revision)
             self.assertEqual(receipt["tree"], expected_tree)
             self.assertEqual((release / "app.py").read_text(encoding="utf-8"), "synthetic fixture\n")
