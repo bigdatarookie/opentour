@@ -1,6 +1,18 @@
 'use strict';
 
 const BASE_PATH=document.querySelector('meta[name=opentour-base]')?.content || '';
+// Only deployment-owned metadata selects an API. Never read hosts/tokens from a URL or storage.
+const API_BASE=(() => {
+  const configured=document.querySelector('meta[name=opentour-api-base]')?.content || '';
+  if (!configured) return BASE_PATH;
+  const url=new URL(configured);
+  if (url.username || url.password || url.search || url.hash || url.origin+url.pathname.replace(/\/$/,'') !== configured
+      || !/^(\/[A-Za-z0-9_-]+)*\/?$/.test(url.pathname)
+      || !(url.protocol==='https:' || (url.protocol==='http:' && ['127.0.0.1','localhost'].includes(url.hostname) && ['127.0.0.1','localhost'].includes(location.hostname)))) {
+    throw new Error('invalid_deployment_api_base');
+  }
+  return configured;
+})();
 const $ = (id) => document.getElementById(id);
 const state = { token: '', session: 0, view: 'tasks', board: null, etag: null, boardBusy: false,
   clients: null, clientRequest: 0, offset: 0, nextOffset: null, modal: null, modalRequest: 0,
@@ -36,7 +48,7 @@ async function api(path, options={}) {
     const headers = {Authorization: `Bearer ${state.token}`};
     if (options.etag) headers['If-None-Match'] = options.etag;
     if (options.body) headers['Content-Type']='application/json';
-    const response = await fetch(BASE_PATH+path, {method:options.body ? 'POST' : 'GET', body:options.body ? JSON.stringify(options.body) : undefined, headers, cache:'no-store', credentials:'omit', signal:controller.signal});
+    const response = await fetch(API_BASE+path, {method:options.body ? 'POST' : 'GET', body:options.body ? JSON.stringify(options.body) : undefined, headers, cache:'no-store', credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', signal:controller.signal});
     if (response.status === 304) return {unchanged:true};
     const data = await response.json();
     if (!response.ok) {

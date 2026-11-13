@@ -12,6 +12,7 @@ from .adapters import EspoCRM, Failure, NativeWork, NativeObligation
 from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
 from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
 from .board_store import BoardStore
+from .web_config import deployment_url, ui_policy
 
 
 class Server(ThreadingHTTPServer):
@@ -33,9 +34,10 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None, allowed_ui_origins=()):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
+    ui_origins = frozenset(deployment_url(origin, origin_only=True) for origin in allowed_ui_origins)
     campaign = campaign or FixtureCampaign()
     obligations = obligations or NativeObligation()
     prefix,public_origin,public_host='','',''
@@ -61,6 +63,13 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
             self.send_header('Connection', 'close')
+            self.send_header('Vary', 'Origin')
+            if getattr(self, 'cors_origin', None):
+                self.send_header('Access-Control-Allow-Origin', self.cors_origin)
+                self.send_header('Access-Control-Expose-Headers', 'ETag')
+                if status == 204:
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+                    self.send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type, If-None-Match')
             if etag:
                 self.send_header('ETag', etag)
             self.send_header('Content-Length', str(len(raw)))
@@ -83,19 +92,23 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
-            self.send_header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', ui_policy() + "; frame-ancestors 'none'")
             self.send_header('Connection', 'close')
             self.end_headers()
             self.wfile.write(raw)
 
         def handle_request(self):
+            self.cors_origin = None
             try:
                 allowed = {'127.0.0.1:' + str(self.server.server_port), 'localhost:' + str(self.server.server_port)}
                 if public_host:allowed.add(public_host)
                 if len(self.headers.get_all('Host', [])) != 1 or self.headers.get('Host') not in allowed:
                     raise Failure('host_forbidden', 403)
                 origin = self.headers.get('Origin')
-                if origin and origin not in ({'http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port)} | ({public_origin} if public_origin else set())):
+                if len(self.headers.get_all('Origin', [])) > 1:
+                    raise Failure('origin_forbidden', 403)
+                same_origins = {'http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port)} | ({public_origin} if public_origin else set())
+                if origin and origin not in same_origins | ui_origins:
                     raise Failure('origin_forbidden', 403)
                 url = urllib.parse.urlsplit(self.path)
                 if url.scheme or url.netloc or len(self.path) > 4096:
@@ -103,6 +116,21 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                 path = urllib.parse.unquote(url.path)
                 if prefix and (path==prefix or path.startswith(prefix+'/')):
                     path=path[len(prefix):] or '/'
+                if origin in ui_origins and origin not in same_origins:
+                    if not path.startswith('/api/'):
+                        raise Failure('cors_route_forbidden', 403)
+                    self.cors_origin = origin
+                    if self.command not in ('GET', 'POST', 'OPTIONS'):
+                        raise Failure('cors_method_forbidden', 403)
+                if self.command == 'OPTIONS':
+                    requested = self.headers.get('Access-Control-Request-Method')
+                    headers = self.headers.get('Access-Control-Request-Headers', '')
+                    if (not self.cors_origin or requested not in ('GET', 'POST')
+                            or len(self.headers.get_all('Access-Control-Request-Method', [])) != 1
+                            or len(self.headers.get_all('Access-Control-Request-Headers', [])) > 1
+                            or any(h.strip().lower() not in ('authorization', 'content-type', 'if-none-match') for h in headers.split(',') if h.strip())):
+                        raise Failure('cors_preflight_forbidden', 403)
+                    return self.respond(204)
                 if self.command == 'GET' and (path in UI_FILES or path == '/ui/campaign-email.css') and not url.query:
                     # Public shell has no embedded data, tokens, source URLs or private files.
                     return self.ui_file(path)
@@ -216,11 +244,12 @@ def main():
     parser.add_argument('--board-db', type=Path, default=Path.home() / '.local/share/opentour/board/board.sqlite3',
                         help='Private OpenTour application DB outside checkout/.artifacts')
     parser.add_argument('--public-base-url',help='Explicit HTTPS origin/prefix behind a trusted proxy; backend stays loopback')
+    parser.add_argument('--allowed-ui-origin', action='append', default=[], help='Exact trusted static UI origin, no path; repeat explicitly. HTTPS or loopback HTTP only; no credential cookies')
     parser.add_argument('--work-root', type=Path, help='Existing registered OpenTour work root for native read projection')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(args.work_root or root / 'opentour-rig', MISSION))
-    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url) as server:
+    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url,allowed_ui_origins=args.allowed_ui_origin) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()
 

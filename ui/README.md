@@ -134,3 +134,80 @@ A boardOnly:true test grant uses one exact task ID and cannot read CRM/native/ca
 Default root-local hosting remains unchanged. --public-base-url https://existing-host/opentour enables a configured HTTPS proxy prefix, including local styles/fonts/API and email preview links. Host/Origin acceptance is explicit; no forwarded-header trust or public raw backend/daemon/CRM. This support is not evidence of publication.
 
 Focused builder browser: python3 tools/board_continuation_probe.py (also --prefix). It uses a fake native transport/recipient and temporary synthetic task, with no actual agent/CRM/native queue calls. Independent System QA must replace that fixture step with a real addressed agent and observe useful original-obligation continuation, stage timings and unresolved backlog on the exact accepted candidate.
+
+## Static UI with an explicit protected API
+
+Default `python3 -m backend.server ...` and same-origin prefix hosting are unchanged.
+The static export is a separate deployment artifact; it neither enables Pages nor
+starts/upgrades any service. Generate it from the reviewed source, into a **new**
+output directory outside the checkout:
+
+```sh
+python3 tools/build_static_ui.py --output /private/tmp/opentour-public-ui --base-path /opentour --api-base-url "$OPENTOUR_PROTECTED_API_BASE"
+```
+
+`OPENTOUR_PROTECTED_API_BASE` is an operator-supplied protected **HTTPS** base,
+including any forwarding prefix, without `/api`, userinfo, query, fragment or
+credentials. No production host is supplied by this repository. Literal
+`http://127.0.0.1:PORT` / `http://localhost:PORT` are accepted only for disposable
+local validation; the browser permits these only when the UI is also loopback.
+Never publish a loopback target as a production artifact. The Pages artifact root
+is the output directory, served at the agreed `/opentour/` project path. Only the
+allowlisted shell, scripts, styles, fonts and fixed campaign presentation CSS are
+copied. No records, credentials, grant files, DB, source exports or source maps
+are included.
+
+The exporter writes deployment-owned API metadata and a CSP meta policy allowing
+connections only to self and the configured API origin. The UI uses that base for
+all API calls and its static base for assets/email preview styles; neither URL
+parameters, fragments nor browser storage can select the API. Bearer access is
+entered separately, stays in memory and is sent in the Authorization header;
+fetch omits cookies and referrers and rejects redirects. Do not put tokens in a
+URL, HTML, build argument or public config. The static host's response headers
+must not add a conflicting self-only `connect-src` policy (multiple CSPs intersect).
+A static meta CSP cannot set `frame-ancestors`; host-level framing protection is a
+separate hosting capability, not a claim of this exporter.
+
+For the corresponding reviewed backend configuration, preserve its existing
+private auth/DB/source references and add:
+
+```sh
+python3 -m backend.server --auth-file "$OPENTOUR_AUTH_FILE" --board-db "$OPENTOUR_BOARD_DB" --public-base-url "$OPENTOUR_PROTECTED_API_BASE" --allowed-ui-origin https://bigdatarookie.github.io
+```
+
+This is a configuration contract, **not** an instruction to replace an existing
+service or omit its existing source options. `--allowed-ui-origin` can be repeated
+for individually trusted origins, without trailing slash/path. No wildcard,
+`null`, non-loopback HTTP, credential-bearing or caller-selected origin is
+accepted. CORS applies to `/api/` only; preflight permits GET/POST and
+Authorization, Content-Type and If-None-Match, without credential cookies. Actual
+requests still require the existing bearer grant and project/object scope.
+Readable 401/403 responses do not grant access; ETag is exposed for conditional
+reads. Origin allowlisting is a browser control, not authentication. The backend
+remains loopback; a forwarding layer must preserve the configured public Host
+and browser Origin, pass OPTIONS/Authorization/ETag, avoid redirects and shared
+API caching, and expose neither the raw backend, CRM nor OpenRig daemon.
+
+Publication-resource owner still owes: the exact protected HTTPS API base and
+forwarding prefix; who can access that forwarding route; its TLS/Host/Origin and
+preflight/header behavior; the authorized Pages artifact publication mechanism;
+and separately issued/revocable private app access. The known UI origin is
+`https://bigdatarookie.github.io`, base `/opentour/`. GitHub's Origin covers the
+whole host, not a project path: assess trusted sibling Pages content before
+adding it. No new real-user grant or production-readiness claim is made here.
+
+Affected synthetic validation, with disposable local origins/profile/DB/grant,
+no CRM/native consumer/worker/canonical runtime:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_static_api.py' -v
+python3 tools/static_api_probe.py
+```
+
+The browser probe uses the existing `agent-browser` invocation and task-owned
+Chrome profile. It checks configured API rendering, server-authored synthetic
+comment, foreign-task denial, unauthorized read, ETag/304, CSP refusal, unlisted
+UI origin refusal and same-origin root/prefix regressions. Its isolated app
+writes never run an outbox worker and do not deliver native context. These checks
+do not prove the unprovisioned external forwarding/Pages route or repeat the
+accepted ticket-to-agent journey.
