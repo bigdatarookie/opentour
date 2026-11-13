@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import subprocess
@@ -173,3 +174,62 @@ class NativeWork:
                 'currentContext': current.group(1).strip() if current else None,
                 'queue': [q for q in queue if 'slice:' + name in (q.get('tags') or [])]})
         return slices, queue_complete
+
+
+class NativeObligation:
+    """Exact local queue/seat reads only; never accepts a caller-selected recipient."""
+    def __init__(self, client=None, seat_lookup=None):
+        self.client = client or JsonGET('http://127.0.0.1:7433')
+        self.seat_lookup = seat_lookup or self._seat
+
+    @staticmethod
+    def _seat(destination):
+        rig = destination.rsplit('@', 1)[1]
+        try:
+            result = subprocess.run(['rig', 'ps', '--nodes', '--rig', rig, '--session', destination,
+                '--fields', 'canonicalSessionName,rigName,logicalId,lifecycleState,runtime', '--json', '--no-cleanup'],
+                capture_output=True, timeout=12, check=True, env={**os.environ,'OPENRIG_URL':'http://127.0.0.1:7433'})
+            if len(result.stdout) > 65536:
+                raise Failure('native_obligation_seat_unavailable', 503)
+            data = json.loads(result.stdout)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            raise Failure('native_obligation_seat_unavailable', 503) from None
+        if not isinstance(data, dict) or data.get('truncated') is not False or data.get('totalNodes') != 1:
+            raise Failure('native_obligation_destination_invalid', 409)
+        entries = data.get('entries')
+        if not isinstance(entries, list) or len(entries) != 1:
+            raise Failure('native_obligation_destination_invalid', 409)
+        return entries[0]
+
+    def resolve(self, reference, expected_destination=None, states=('pending', 'in-progress', 'blocked')):
+        if not isinstance(reference, str) or not re.fullmatch(r'qitem-[A-Za-z0-9_-]{1,160}', reference):
+            raise Failure('invalid_continuation_reference', 400)
+        try:
+            item = self.client.get('/api/queue/' + reference)
+        except Failure as exc:
+            if exc.status == 404:
+                raise Failure('native_obligation_not_found', 409) from None
+            raise
+        if not isinstance(item, dict) or item.get('qitemId') != reference:
+            raise Failure('native_obligation_identity_mismatch', 409)
+        tags = item.get('tags')
+        if (not isinstance(tags, list) or any(not isinstance(t, str) for t in tags)
+                or {t for t in tags if t.startswith('project:')} != {'project:opentour'}
+                or {t for t in tags if t.startswith('mission:')} != {'mission:01-local-information-layer'}):
+            raise Failure('native_obligation_scope_mismatch', 409)
+        if item.get('state') not in states:
+            raise Failure('native_obligation_state_ineligible', 409)
+        destination = item.get('destinationSession')
+        if (not isinstance(destination, str) or not (re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*@opentour-rig', destination)
+                or destination == 'operator-agent@kernel')):
+            raise Failure('native_obligation_destination_invalid', 409)
+        if expected_destination is not None and destination != expected_destination:
+            raise Failure('native_obligation_owner_changed', 409)
+        seat = self.seat_lookup(destination)
+        if (not isinstance(seat, dict) or seat.get('canonicalSessionName') != destination
+                or seat.get('rigName') != destination.rsplit('@', 1)[1]
+                or seat.get('runtime') not in ('codex','claude')
+                or not isinstance(seat.get('logicalId'), str) or not seat['logicalId']
+                or seat.get('lifecycleState') in ('archived', 'retired', 'removed')):
+            raise Failure('native_obligation_destination_invalid', 409)
+        return destination

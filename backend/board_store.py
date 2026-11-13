@@ -81,7 +81,7 @@ class BoardStore:
         self.path = path
         with self.db() as db:
             schema = db.execute('PRAGMA user_version').fetchone()[0]
-            if schema not in (0, 1, 2, 3):
+            if schema not in (0, 1, 2, 3, 4):
                 raise Failure('board_schema_unsupported', 503)
             if schema == 0:
                 for sql in SCHEMA:
@@ -94,6 +94,10 @@ class BoardStore:
                 for sql in DELIVERY_SCHEMA:
                     db.execute(sql)
                 db.execute('PRAGMA user_version=3')
+            if schema < 4:
+                db.execute('ALTER TABLE task_execution ADD COLUMN destination TEXT')
+                db.execute('ALTER TABLE outbox ADD COLUMN routing_ref TEXT')
+                db.execute('PRAGMA user_version=4')
 
     @contextmanager
     def db(self):
@@ -140,7 +144,7 @@ class BoardStore:
         db.execute('INSERT INTO requests VALUES(?,?,?,?,?)',
                    (principal.subject, operation, request_id, version(payload), result_id))
 
-    def create(self, principal, body, validate_client=None):
+    def create(self, principal, body, validate_client=None, resolve_obligation=None):
         self.permit(principal, create=True)
         fields(body, ('requestId', 'title', 'description', 'section', 'requestText', 'clientRef', 'continuationRef'))
         payload = {'title': text(body.get('title'), 240), 'description': text(body.get('description'), 4000),
@@ -156,13 +160,20 @@ class BoardStore:
             payload['continuationRef'] = continuation
         reference = client_reference(body.get('clientRef'))
         if reference is not None:
-            payload['clientRef'] = reference  # Absent refs retain v1 request digest/replay semantics.
-            if validate_client:
-                with self.db() as db:
-                    existing = self.replay(db, principal, 'create', body.get('requestId'), payload)
-                if existing:
-                    return self.detail(principal, existing)
-                validate_client(reference)  # Fixed CRM detail read, outside the DB transaction.
+            payload['clientRef'] = reference
+        with self.db() as db:
+            existing = self.replay(db, principal, 'create', body.get('requestId'), payload)
+        if existing:
+            return self.detail(principal, existing)
+        if reference is not None and validate_client:
+            validate_client(reference)
+        destination = None
+        if continuation is not None:
+            if resolve_obligation is None:
+                raise Failure('native_obligation_lookup_required', 503)
+            destination = resolve_obligation(continuation)
+            if not isinstance(destination,str) or not destination:
+                raise Failure('native_obligation_destination_invalid',409)
         with self.db() as db:
             task_id = self.replay(db, principal, 'create', body.get('requestId'), payload)
             if not task_id:
@@ -170,7 +181,7 @@ class BoardStore:
                 db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',
                            (task_id, PROJECT, payload['title'], payload['description'], payload['section'], principal.subject, now()))
                 if continuation is not None:
-                    db.execute('INSERT INTO task_execution VALUES(?,?)', (task_id, continuation))
+                    db.execute('INSERT INTO task_execution(task_id,native_ref,destination) VALUES(?,?,?)', (task_id, continuation, destination))
                 if reference is not None:
                     db.execute('INSERT INTO task_clients VALUES(?,?,?)', (task_id, reference['entity'], reference['externalId']))
                 self.remember(db, principal, 'create', body['requestId'], payload, task_id)
@@ -196,11 +207,14 @@ class BoardStore:
         raw = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         outbox_id = 'context_' + hashlib.sha256((PROJECT + ':' + message_id).encode()).hexdigest()
         native_id = 'qitem-opentour-context-' + hashlib.sha256(outbox_id.encode()).hexdigest()[:32]
-        db.execute('INSERT INTO outbox(id,message_id,destination,native_id,payload,digest,state,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                   (outbox_id, message_id, DESTINATIONS[task['section']], native_id, raw, version(context), 'pending', now()))
+        routing = db.execute('SELECT native_ref,destination FROM task_execution WHERE task_id=?', (task_id,)).fetchone()
+        destination = routing['destination'] if routing and routing['destination'] else DESTINATIONS[task['section']]
+        routing_ref = routing['native_ref'] if routing and routing['destination'] else None
+        db.execute('INSERT INTO outbox(id,message_id,destination,native_id,payload,digest,state,updated_at,routing_ref) VALUES(?,?,?,?,?,?,?,?,?)',
+                   (outbox_id, message_id, destination, native_id, raw, version(context), 'pending', now(), routing_ref))
         return message_id
 
-    def append(self, principal, task_id, body):
+    def append(self, principal, task_id, body, resolve_obligation=None):
         fields(body, ('requestId', 'kind', 'text', 'replyTo', 'replyVersion'))
         kind = body.get('kind')
         if kind not in ('answer', 'comment', 'request') or (kind == 'request' and principal.role != 'administrator'):
@@ -210,6 +224,17 @@ class BoardStore:
             payload['replyVersion'] = body['replyVersion']
         if (kind == 'answer') != isinstance(payload['replyTo'], str) or (kind != 'answer' and payload['replyTo'] is not None):
             raise Failure('answer_request_link_required', 400)
+        with self.db() as db:
+            self.task(db, principal, task_id, write=True)
+            existing = self.replay(db, principal, 'message:' + task_id, body.get('requestId'), payload)
+            routing = db.execute('SELECT native_ref,destination FROM task_execution WHERE task_id=?', (task_id,)).fetchone()
+        if existing:
+            return {'taskId': task_id, 'messageId': existing, 'persistence': 'saved', **self.message(principal, task_id, existing)}
+        if routing and routing['destination']:
+            if resolve_obligation is None:
+                raise Failure('native_obligation_lookup_required', 503)
+            if resolve_obligation(routing['native_ref'], routing['destination']) != routing['destination']:
+                raise Failure('native_obligation_owner_changed',409)
         with self.db() as db:
             self.task(db, principal, task_id, write=True)
             message_id = self.replay(db, principal, 'message:' + task_id, body.get('requestId'), payload)

@@ -8,7 +8,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .adapters import EspoCRM, Failure, NativeWork
+from .adapters import EspoCRM, Failure, NativeWork, NativeObligation
 from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
 from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
 from .board_store import BoardStore
@@ -33,10 +33,11 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
     campaign = campaign or FixtureCampaign()
+    obligations = obligations or NativeObligation()
     prefix,public_origin,public_host='','',''
     if public_base_url:
         public=urllib.parse.urlsplit(public_base_url)
@@ -137,8 +138,8 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                         if len(raw) != int(raw_length):
                             raise Failure('incomplete_body', 400)
                         body = json.loads(raw)
-                        data = board_store.append(principal, parts[0], body) if parts else board_store.create(
-                            principal, body, validate_client=lambda ref: service.client('crm:' + ref['entity'] + ':' + ref['externalId']))
+                        data = board_store.append(principal, parts[0], body, resolve_obligation=obligations.resolve) if parts else board_store.create(
+                            principal, body, validate_client=lambda ref: service.client('crm:' + ref['entity'] + ':' + ref['externalId']), resolve_obligation=obligations.resolve)
                         return self.respond(200, data)
                     else:
                         raise Failure('board_route_forbidden', 403)

@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from backend.adapters import Failure
+from backend.adapters import Failure, NativeObligation
 from backend.board_store import BoardStore
 from backend.context_delivery import (NativeContext, SERVICE_SOURCE, SOURCE, Rejected, deliver_one,
     receive_context, report_context, serve_worker, delivery_status)
@@ -16,6 +16,11 @@ from test_board_conversations import ADMIN, USER, SyntheticTransport
 
 class Delivery(SyntheticTransport):
     source=SERVICE_SOURCE
+    def validate_destination(self,row,continued=False):
+        class Client:
+            def get(_self,path):return self.lookup(path.rsplit('/',1)[-1])
+        def seat(destination):return {'canonicalSessionName':destination,'rigName':destination.rsplit('@',1)[1],'logicalId':'synthetic.agent','lifecycleState':'running','runtime':'codex'}
+        return NativeObligation(Client(),seat).resolve(row['routing_ref'],row['destination'],('in-progress','done') if continued else ('pending','in-progress','blocked'))
     def send(self,row):
         self.sends+=1
         item={'qitemId':row['native_id'],'destinationSession':row['destination'],'sourceSession':self.source,
@@ -31,15 +36,15 @@ class ContinuationTests(unittest.TestCase):
         self.store=BoardStore(Path(self.tmp.name)/'data'/'board.sqlite3')
         self.task=self.store.create(ADMIN,{'requestId':'create-v012-0001','title':'Synthetic work',
             'description':'Synthetic only','section':'clients','requestText':'Which synthetic choice?',
-            'continuationRef':'qitem-synthetic-original'})
+            'continuationRef':'qitem-synthetic-original'},resolve_obligation=lambda ref,expected=None:'campaign-creative@opentour-rig')
         self.request=self.task['messages'][0]
         self.transport=Delivery()
         self.session='campaign-creative@opentour-rig'
-        self.transport.rows['qitem-synthetic-original']={'qitemId':'qitem-synthetic-original','destinationSession':self.session,'state':'in-progress','tags':['project:opentour']}
+        self.transport.rows['qitem-synthetic-original']={'qitemId':'qitem-synthetic-original','destinationSession':self.session,'state':'in-progress','tags':['project:opentour','mission:01-local-information-layer']}
 
     def answer(self,request_id='answer-v012-0001',**extra):
         return self.store.append(USER,self.task['id'],{'requestId':request_id,'kind':'answer',
-            'replyTo':self.request['id'],'replyVersion':self.request['version'],'text':'Synthetic choice B',**extra})
+            'replyTo':self.request['id'],'replyVersion':self.request['version'],'text':'Synthetic choice B',**extra},resolve_obligation=lambda ref,expected=None:'campaign-creative@opentour-rig')
 
     def delivered(self):
         answer=self.answer();outbox=answer['delivery']['id']
@@ -85,7 +90,7 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(self.transport.sends,1)
 
     def test_comment_does_not_close_request_and_insufficient_answer_stays_open(self):
-        self.store.append(USER,self.task['id'],{'requestId':'comment-v012-001','kind':'comment','text':'Synthetic aside'})
+        self.store.append(USER,self.task['id'],{'requestId':'comment-v012-001','kind':'comment','text':'Synthetic aside'},resolve_obligation=lambda ref,expected=None:'campaign-creative@opentour-rig')
         self.assertEqual(self.store.detail(USER,self.task['id'])['requestState'],'awaiting_answer')
         outbox=self.delivered();receive_context(self.store,outbox,self.session)
         self.report(outbox,'needs_clarification',reason='Need the synthetic date.')
@@ -156,7 +161,7 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(status['backlog']['delivered'],2)
 
     def test_accepted_comment_cannot_continue_or_close_original_request(self):
-        comment=self.store.append(USER,self.task['id'],{'requestId':'comment-v012-002','kind':'comment','text':'Synthetic aside'})
+        comment=self.store.append(USER,self.task['id'],{'requestId':'comment-v012-002','kind':'comment','text':'Synthetic aside'},resolve_obligation=lambda ref,expected=None:'campaign-creative@opentour-rig')
         outbox=comment['delivery']['id'];deliver_one(self.store,self.transport,outbox);receive_context(self.store,outbox,self.session)
         self.report(outbox,'accepted')
         self.failure('only_answer_can_continue_request',lambda:self.report(outbox,'continued',result='Only a comment',evidence='qitem-synthetic-original'))

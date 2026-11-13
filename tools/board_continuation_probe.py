@@ -22,7 +22,7 @@ def main():
         # The published test grant is explicitly board-only and exact-task scoped.
         for grant in grants:grant['boardOnly']=True
         with store.db() as db:
-            db.execute('INSERT INTO task_execution VALUES(?,?)',(task['id'],'qitem-synthetic-original'))
+            db.execute('INSERT INTO task_execution(task_id,native_ref) VALUES(?,?)',(task['id'],'qitem-synthetic-original'))
         class NoSources:
             def __getattr__(self,_):raise AssertionError('no_source_access_permitted')
         server=make_server(NoSources(),Auth(grants=grants),0,data_mode='synthetic',board_store=store,public_base_url='https://board.example.invalid/opentour' if args.prefix else None)
