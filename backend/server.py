@@ -13,6 +13,7 @@ from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
 from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
 from .board_store import BoardStore
 from .web_config import deployment_url, ui_policy
+from .client_conversations import ClientControls
 
 
 class Server(ThreadingHTTPServer):
@@ -34,10 +35,11 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None, allowed_ui_origins=()):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None, allowed_ui_origins=(), client_controls=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
     ui_origins = frozenset(deployment_url(origin, origin_only=True) for origin in allowed_ui_origins)
+    client_controls = client_controls or ClientControls()
     campaign = campaign or FixtureCampaign()
     obligations = obligations or NativeObligation()
     prefix,public_origin,public_host='','',''
@@ -97,6 +99,16 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
             self.end_headers()
             self.wfile.write(raw)
 
+        def read_body(self):
+            if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
+                raise Failure('content_length_required',411)
+            length=self.headers.get('Content-Length','')
+            if not length.isdigit() or not 0<int(length)<=32768:raise Failure('request_body_too_large',413)
+            if self.headers.get('Content-Type')!='application/json':raise Failure('json_required',415)
+            raw=self.rfile.read(int(length))
+            if len(raw)!=int(length):raise Failure('incomplete_body',400)
+            return json.loads(raw)
+
         def handle_request(self):
             self.cors_origin = None
             try:
@@ -154,23 +166,23 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                     parts = path[len('/api/board-tasks'):].strip('/').split('/') if path != '/api/board-tasks' else []
                     if self.command == 'GET' and len(parts) <= 1:
                         data = board_store.detail(principal, parts[0]) if parts else board_store.list(principal)
+                    elif self.command == 'POST' and len(parts)==2 and parts[1]=='proposal':
+                        return self.respond(200,board_store.save_proposal(principal,parts[0],self.read_body()))
                     elif self.command == 'POST' and (not parts or len(parts) == 2 and parts[1] == 'messages'):
-                        if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
-                            raise Failure('content_length_required', 411)
-                        raw_length = self.headers.get('Content-Length', '')
-                        if not raw_length.isdigit() or not 0 < int(raw_length) <= 32768:
-                            raise Failure('request_body_too_large', 413)
-                        if self.headers.get('Content-Type') != 'application/json':
-                            raise Failure('json_required', 415)
-                        raw = self.rfile.read(int(raw_length))
-                        if len(raw) != int(raw_length):
-                            raise Failure('incomplete_body', 400)
-                        body = json.loads(raw)
+                        body = self.read_body()
                         data = board_store.append(principal, parts[0], body, resolve_obligation=obligations.resolve) if parts else board_store.create(
                             principal, body, validate_client=lambda ref: service.client('crm:' + ref['entity'] + ':' + ref['externalId']), resolve_obligation=obligations.resolve)
                         return self.respond(200, data)
                     else:
                         raise Failure('board_route_forbidden', 403)
+                elif self.command=='POST' and path.startswith('/api/clients/') and path.endswith('/conversation') and not params:
+                    if not board_store:raise Failure('board_store_not_configured',503)
+                    client_id=path[len('/api/clients/'):-len('/conversation')]
+                    parts=client_id.split(':')
+                    if len(parts)!=3 or parts[0]!='crm':raise Failure('invalid_client_reference',400)
+                    reference={'entity':parts[1],'externalId':parts[2]}
+                    return self.respond(200,board_store.open_client_conversation(principal,reference,self.read_body(),
+                        lambda ref:service.client('crm:'+ref['entity']+':'+ref['externalId']),client_controls,obligations.resolve))
                 elif self.command != 'GET':
                     # Only OpenTour conversation writes are exposed; native decisions remain closed.
                     raise Failure(WRITE_LIMITATION, 403)
@@ -191,6 +203,8 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                         ref = {'entity': data['provenance']['entity'], 'externalId': data['provenance']['externalId']}
                         data['relatedWork'] = board_store.related(principal, ref) if principal.board_read else {
                             'items': [], 'status': 'board_access_not_granted', 'complete': False}
+                        data['clientConversation']={'enabled':board_store.client_key(ref) in principal.conversation_clients and principal.board_read and principal.board_respond,
+                            'canEditProposal':principal.proposal_edit}
                         data['version'] = version({k: v for k, v in data.items() if k != 'version'})
                 elif path == '/api/campaigns' and not params:
                     data = campaign.list()
@@ -245,11 +259,12 @@ def main():
                         help='Private OpenTour application DB outside checkout/.artifacts')
     parser.add_argument('--public-base-url',help='Explicit HTTPS origin/prefix behind a trusted proxy; backend stays loopback')
     parser.add_argument('--allowed-ui-origin', action='append', default=[], help='Exact trusted static UI origin, no path; repeat explicitly. HTTPS or loopback HTTP only; no credential cookies')
+    parser.add_argument('--client-controls-file', type=Path, help='Private server-owned exact clientRef to existing continuationRef bindings; never browser-selected')
     parser.add_argument('--work-root', type=Path, help='Existing registered OpenTour work root for native read projection')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(args.work_root or root / 'opentour-rig', MISSION))
-    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url,allowed_ui_origins=args.allowed_ui_origin) as server:
+    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url,allowed_ui_origins=args.allowed_ui_origin,client_controls=ClientControls(args.client_controls_file)) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()
 

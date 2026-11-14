@@ -91,3 +91,54 @@ OPENTOUR_LEGACY_RELEASE="/Users/garry/Library/Application Support/OpenTour/relea
 ```
 
 The tests verify a private schema-3 snapshot, PR20's real `BoardStore` 3→4 migration with sample task/outbox rows preserved, integrity, guarded restoration, refusal when app/outbox rows change, a schema-3 open by the installed legacy source when available, exact-commit archive staging, and parse/validation of temporary LaunchAgents. No test loads a plist with `launchctl`, opens a service, reads the production DB, or contacts OpenRig.
+
+## Schema 5 client conversations: reviewed local adoption contract
+
+This is source preparation, not permission to operate the live DB or services
+while authoring. After independent reviewed merge, DevOps stages that exact
+release and preserves the current live schema4/2fd09e2 process and receipt
+history until the authorized integration window. The current schema3 backup is
+not current and must not replace schema4 receipts.
+
+Take a **fresh** private SQLite online backup/manifest with the existing `backup`
+command; record integrity, schema4 and fingerprints/counts without row values.
+Inspect pending/unknown deliveries by exact IDs and reconcile before worker
+restart. Stop worker then server, confirm process exit, stage reviewed source,
+and open BoardStore once for the transactional4→5 migration. It adds only
+`client_conversations` and `proposal_revisions`; no existing messages/outbox rows
+are rewritten. Opening the same schema5 DB again is idempotent. Older binaries
+refuse schema5, so do not point the old release at that migrated DB.
+
+Preserve existing private source/auth references. Add only the reviewed exact
+client grant and `--client-controls-file` binding described in backend/README.md;
+use a separately authorized synthetic CRM record/Creative obligation. Existing
+GET-only CRM credentials never gain writes. Verify source/process working dir,
+schema5, integrity and pre-migration legacy row fingerprints, then server health
+and exact scoped access. Start worker only after native-effect reconciliation.
+Independent QA owns actual first/second agent replies and persistence checks.
+
+A bounded **pre-traffic** rollback is now available, tested on disposable DBs:
+
+```sh
+python3 tools/local_board_release.py restore-v4 --database "$OPENTOUR_BOARD_DB" --backup "$OPENTOUR_FRESH_SCHEMA4_BACKUP" --assert-services-stopped
+```
+
+The CLI checks both LaunchAgents are stopped. It requires the fresh verified
+schema4 snapshot, schema5 current DB, exactly the two empty new tables, every
+pre-existing table/row/receipt/worker heartbeat unchanged, and no SQLite sidecar.
+Any new contextual row, reply, proposal, message, receipt/native effect or changed
+worker state refuses replacement. If an effect occurred or remains unknown,
+preserve schema5 and reconcile/forward-fix; never restore over it or run schema4
+code. The old schema3→4 restore remains its separately bounded historical path.
+These helpers do not install/load agents or change grants; no author activation
+is performed by this PR.
+
+The reviewed renderer now accepts optional `--crm-credential-file` and
+`--client-controls-file` references on `render-agents`. Supply only the
+independently verified GET-only CRM reference and reviewed exact controls. It
+checks private file ownership/mode/path without reading contents, passes the
+references only to the server and validates exact readback. Omitting them keeps
+the existing profile; readback without the matching explicit references rejects
+a plist that adds them. No credential file, identity or grant is created or
+modified by rendering. This makes the local adoption plan executable without
+bypassing the old renderer's default no-CRM-reference profile.

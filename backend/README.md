@@ -64,3 +64,117 @@ EspoCRM query fields and paging follow the vendor [search parameter contract](ht
 
 
 Read-only native action observation metadata is available for a known scoped original task through the existing board authorization. See [NATIVE_OBSERVATIONS.md](NATIVE_OBSERVATIONS.md) for the fixed route, source bounds, privacy projection and explicit unconfirmed identity/action semantics. This does not enable native writes or turn an audit entry into an accepted human decision.
+
+## Local client conversation and proposal drafts (schema 5)
+
+The new flow is opt-in. Old grants, task writes, source reads and same-origin
+runtime remain available. No existing grant gains contextual creation/editing.
+Use one explicit synthetic control CRM Contact during independent integration;
+source/author tests use disposable in-memory CRM fixtures only. Contact/Account
+cards remain CRM truth. Existing GET-only CRM access is **not** upgraded into a
+writer, Contact.description remains import provenance, and no Contact.status is
+invented. App comments/status and proposals live in OpenTour.
+
+The server-owned hashed bearer grant can add this bounded scope:
+
+```json
+{
+  "subject": "synthetic-context-reviewer",
+  "role": "user",
+  "projects": ["opentour"],
+  "tokenSha256": "<private hash of separately issued app access>",
+  "board": {"read": true, "respond": true, "tasks": []},
+  "clientConversations": {
+    "clients": ["crm:Contact:<exact-control-id>"],
+    "editProposal": true
+  }
+}
+```
+
+Do not publish a real hash/token or use these placeholders as a live grant. No
+administrator/wildcard is needed: the exact client scope permits creation and
+access only to the new contextual conversation for that client. Other ordinary
+board tasks still need their own existing task scope. `boardOnly` continues to
+block CRM routes; a client-card user needs its separately intended CRM-read
+access. Revocation is read per HTTP request as before. The existing project-wide
+CRM-read grant policy is unchanged; contextual scope is not a CRM field writer.
+
+Supply `--client-controls-file /absolute/private/client-controls.json`, mode0600,
+with deployment-owned bindings, never browser-selected recipient/command/host:
+
+```json
+{"clients":[{"clientRef":{"entity":"Contact","externalId":"<exact-control-id>"},"continuationRef":"qitem-<existing-Creative-control-obligation>"}]}
+```
+
+The real qitem must be active, tagged exactly for this project/mission, assigned
+to the registered `campaign-creative@opentour-rig`; the existing NativeObligation
+checks resolve/pin/recheck it. Keep that original obligation active through both
+clarification rounds. The worker's claimed service actor remains attribution
+only; actual agent receipt/replies require its real addressed managed-seat
+identity. A missing grant, CRM record or binding gives an honest error, not a
+fixture response. Do not invent control IDs or touch owner records. Provisioning
+these exact controls and adopting reviewed code belongs to DevOps/Data and
+independent integration under Lead, after reviewed merge.
+
+API on the existing authenticated backend:
+
+- `POST /api/clients/crm:Contact:<id>/conversation`, `{requestId,text}`: verify
+  explicit client grant and CRM record, resolve server-owned obligation, then
+  atomically create/open the client conversation, append message and create
+  stable outbox intent. One contextual conversation is reused per typed client.
+  Same actor/key/content replays; changed content with the same key is409.
+- Existing `GET /api/board-tasks`, task detail, and `POST .../<task>/messages`
+  expose that same context through the exact client grant or existing explicit
+  task grant. Client/task links are immutable; no browser author/recipient fields.
+  Context includes a bounded last12-message snapshot and current proposal at
+  save time. Unknown native delivery reconciles the existing stable key only.
+- `POST /api/board-tasks/<task>/proposal`,
+  `{requestId,baseRevision,title,body}`: edit an agent-created internal draft only
+  with explicit `editProposal` and respond/client scope. Append a revision, keep
+  its source-message/client/task links and old revision. A stale base is409;
+  exact-key retry returns its saved revision even after later edits. Editing
+  does not send a campaign, book, pay or generate another outbox event. Send a
+  separate clarification message when agent work is wanted.
+
+The addressed agent first uses the existing generated `--receive <delivery>`
+command. It returns immutable saved context plus `currentProposal` and any
+`savedAgentReply` for reconciliation. A client delivery envelope then offers:
+
+```sh
+python3 -m backend.context_delivery --board-db "$OPENTOUR_BOARD_DB" --reply "$OPENTOUR_DELIVERY_ID" --reply-file /absolute/private/reply.json
+```
+
+The mode0600 JSON file contains `{requestId,text,proposal?}`. An optional proposal
+contains `{baseRevision,title,body}`; base is0 for its first revision. The text
+may ask a useful clarification without inventing a ready proposal. The CLI
+verifies `rig whoami`, exact delivered/received context and current original
+native owner, then atomically appends the agent reply and optional revision.
+There is no browser agent-author endpoint, no deterministic agent responder and
+no echo delivery for a return. Retry the exact file/key after an unknown result;
+read `savedAgentReply`/`currentProposal` before doing work again. Changed body
+with an old key or a second reply to that same delivery is409. A stale proposal
+base rolls back both reply and proposal; reconcile current edits before a new
+attempt. Close only the delivery qitem after a useful return; native queue owns
+custody. Existing native-human decision/booking/send authority is unchanged.
+
+Atlas client details provide the contextual entry, its linked task modal shows
+history and editable draft, and the right panel accepts scoped clarification
+only while that permitted context is selected. Drafts stay per task in the
+current tab; refresh cannot silently rebase a dirty proposal. A committed
+response loss freezes the same request payload until retry; a conflict preserves
+local text. Saved content/revisions survive reload; **unsaved** text is tab-memory
+only, is not promised across full browser reload, and is cleared on disconnect.
+
+Validation:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_client_conversations.py' -v
+python3 tools/client_proposal_probe.py
+```
+
+The browser probe injects two explicitly fictional agent-return fixtures to test
+rendering/revisions/errors. It never invokes a real agent/daemon/CRM/worker and
+is not actual-agent integration acceptance. Creative's independent v016 scenario
+uses budget60000RUB as a fictional customer ceiling, not supplier price; price,
+availability and terms remain UNKNOWN. Independent integration must obtain real
+useful replies and a second revised draft on authorized control objects.

@@ -77,6 +77,7 @@ function loadingBoard() {
 function resetSession(message='') {
   cancelBoardMotion();state.panelRequest++;state.panelTask=null;state.role=null;setAtlasPanel(false);$('dialog-toggle').disabled=true;
   $('messages').replaceChildren();$('agent-object').textContent='';$('session-role').textContent='';
+  $('chat-text').value='';$('chat-text').disabled=true;$('chat-send').disabled=true;$('chat-send').onclick=null;$('chat-text').oninput=null;
   state.session++; state.token=''; state.board=null; state.etag=null; state.clients=null;
   state.clientRequest++; state.modalRequest++; state.boardBusy=false; state.modal=null;
   state.campaignRequest++;state.campaigns=null;
@@ -443,6 +444,7 @@ function renderDetail(kind,item) {
       if (!item.relatedWork.complete) related.append(node('p','','Показана часть доступных работ.'));
     } else related.append(node('p','','Связанные работы недоступны для этого доступа или подключения.'));
     main.append(related);
+    if(item.clientConversation?.enabled) main.append(clientConversationForm(item));
     side.append(metadata([['Тип',item.kind === 'organization' ? 'Организация' : 'Физическое лицо'],['Источник','CRM'],['Изменено',item.modifiedAt || 'Не указано']]));
     try {
       const url=new URL(item.sourceLink);
@@ -454,7 +456,7 @@ function renderDetail(kind,item) {
       const source=node('details','detail-provenance');const ref=item.provenance.import;
       source.append(node('summary','','Происхождение записи'),node('p','',`Источник: ${ref.sourceIdentity}\nСтрока: ${ref.logicalRow}\nВерсия сопоставления: ${ref.mappingVersion}`));side.append(source);
     }
-    side.append(node('div','detail-note','Изменение записей выполняется в CRM. Эта страница ничего не сохраняет и не дополняет автоматически.'));
+    side.append(node('div','detail-note','Карточка поступает из CRM. Обсуждение и черновик предложения сохраняются отдельно в OpenTour; отправка и бронирование не выполняются.'));
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
   if (kind === 'client' && state.modal?.restoreClient) {
@@ -566,11 +568,12 @@ async function loadAppTasks() {
     $('app-task-list').replaceChildren();$('app-task-status').textContent='Обсуждения недоступны. Обновите данные, чтобы повторить чтение.';
   } finally {if (session === state.session) state.appBusy=false;}
 }
-const deliveryLabels={pending:'Ожидает доставки агенту',delivered:'Контекст доставлен в очередь агента',failed:'Доставка отклонена до отправки',unknown:'Результат доставки неизвестен — требуется сверка'};
-const processingLabels={unconfirmed:'Обработка агентом: не подтверждена',awaiting_answer:'Ожидается ответ на запрос',comment_only:'Комментарий сохранён; запрос не закрыт',saved:'Ответ сохранён',pending:'Ожидает доставки',delivered:'Доставлено агенту',received:'Контекст получен агентом',accepted:'Ответ принят агентом',continued:'Работа продолжена',needs_clarification:'Нужно уточнение',rejected:'Ответ отклонён',failed:'Доставка отклонена',unknown:'Результат доставки неизвестен'};
+const deliveryLabels={not_applicable:'Ответ агента сохранён в обсуждении',pending:'Ожидает доставки агенту',delivered:'Контекст доставлен в очередь агента',failed:'Доставка отклонена до отправки',unknown:'Результат доставки неизвестен — требуется сверка'};
+const processingLabels={agent_replied:'Агент ответил; предложение не отправлено',returned:'Возвращено в тот же контекст',unconfirmed:'Обработка агентом: не подтверждена',awaiting_answer:'Ожидается ответ на запрос',comment_only:'Комментарий сохранён; запрос не закрыт',saved:'Ответ сохранён',pending:'Ожидает доставки',delivered:'Доставлено агенту',received:'Контекст получен агентом',accepted:'Ответ принят агентом',continued:'Работа продолжена',needs_clarification:'Нужно уточнение',rejected:'Ответ отклонён',failed:'Доставка отклонена',unknown:'Результат доставки неизвестен'};
 function renderAppTask(item) {
   if(state.modal?.kind==='app' && state.modal.id===item.id) state.modal.version=item.version;
-  const wasInput=document.activeElement?.id==='app-response-text';const caret=wasInput ? [document.activeElement.selectionStart,document.activeElement.selectionEnd] : null;
+  const editingId=['app-response-text','proposal-title','proposal-body'].includes(document.activeElement?.id) ? document.activeElement.id : null;
+  const wasInput=!!editingId;const caret=wasInput ? [document.activeElement.selectionStart,document.activeElement.selectionEnd] : null;
   const scroll=$('detail-body').scrollTop;
   $('detail-mode').textContent=state.boardAccess?.respond ? 'Ответ сохраняется в OpenTour' : 'Режим просмотра';
   $('detail-title').textContent=item.title;$('detail-eyebrow').textContent='ОБСУЖДЕНИЕ ЗАДАЧИ · OPENTOUR';
@@ -580,7 +583,7 @@ function renderAppTask(item) {
   const history=node('section','app-history');history.setAttribute('aria-label','Обсуждение задачи');
   for (const message of item.messages) {
     const entry=node('article','app-message');entry.dataset.messageId=message.id;
-    entry.append(node('h3','',({request:'Запрос',answer:'Ответ',comment:'Комментарий'})[message.kind]),node('p','message-body',message.body));
+    entry.append(node('h3','',({request:'Запрос',answer:'Ответ',comment:'Сообщение',agent_reply:'Ответ агента'})[message.kind]),node('p','message-body',message.body));
     if (message.reply_to) {const request=item.messages.find(m => m.id === message.reply_to);entry.append(node('p','detail-note','Ответ на запрос: '+(request ? request.body : 'Предыдущий запрос этой задачи')));}
     entry.append(node('p','detail-note','Сохранено · '+(deliveryLabels[message.delivery.state] || 'Доставка не подтверждена')),
       node('p','detail-note',processingLabels[message.delivery.processing] || processingLabels.unconfirmed));
@@ -590,9 +593,10 @@ function renderAppTask(item) {
   }
   if (!item.historyComplete) history.append(node('p','','Показаны последние 100 сообщений; история неполная.'));
   root.append(history,button('Обновить обсуждение',() => loadDetail()));
+  if(item.conversation?.enabled) root.append(proposalEditor(item));
   if (state.boardAccess?.respond) {
     let draft=state.drafts.get(item.id);
-    if (!draft) {draft={text:'',replyTo:[...item.messages].reverse().find(m => m.kind === 'request')?.id || '',requestId:null,frozen:null};state.drafts.set(item.id,draft);}
+    if (!draft) {draft={text:'',replyTo:item.conversation?.enabled ? '' : [...item.messages].reverse().find(m => m.kind === 'request')?.id || '',requestId:null,frozen:null};state.drafts.set(item.id,draft);}
     const form=node('form','app-response');
     const label=node('label','','Ответ или комментарий');label.htmlFor='app-response-text';
     const target=node('select','observation-select');target.id='app-response-target';target.setAttribute('aria-label','Связь ответа с запросом');
@@ -631,7 +635,7 @@ function renderAppTask(item) {
   }
   $('detail-body').replaceChildren(root);$('detail-body').scrollTop=scroll;
   if (state.modal?.clientNavigationFocus) {delete state.modal.clientNavigationFocus;root.querySelector('[data-return-client]')?.focus({preventScroll:true});}
-  else if(wasInput) {const next=root.querySelector('#app-response-text');next?.focus({preventScroll:true});if(caret) next?.setSelectionRange(...caret);}
+  else if(wasInput) {const next=root.querySelector('#'+editingId);next?.focus({preventScroll:true});if(caret) next?.setSelectionRange(...caret);}
 }
 
 // Atlas shell: actual scoped task history; free dialogue remains explicitly unavailable.
@@ -656,8 +660,8 @@ function updateAtlasContext(object) {
   if(task) {
     $('dialog-hint').textContent='Сохранённое обсуждение задачи OpenTour. Ответить можно в карточке.';
     for(const message of task.messages) {
-      const entry=node('div','message '+(message.kind==='request' ? 'agent' : 'user'));
-      entry.append(node('span','author',message.author_role==='administrator' ? 'Администратор' : 'Пользователь'),node('p','message-body',message.body));
+      const entry=node('div','message '+(message.kind==='request' || message.author_role==='agent' ? 'agent' : 'user'));
+      entry.append(node('span','author',message.author_role==='agent' ? 'Агент · '+message.author : message.author_role==='administrator' ? 'Администратор' : 'Пользователь'),node('p','message-body',message.body));
       entry.append(node('p','field-hint',deliveryLabels[message.delivery.state] || 'Доставка не подтверждена'),node('p','field-hint',processingLabels[message.delivery.processing] || processingLabels.unconfirmed));
       $('messages').append(entry);
     }
@@ -667,10 +671,11 @@ function updateAtlasContext(object) {
     $('dialog-hint').textContent='Контекст текущего раздела.';
     $('messages').append(node('p','panel-notice','История свободного диалога ещё недоступна. Доступные обсуждения задач открываются с доски или из карточки клиента.'));
   }
+  if(task?.conversation?.canMessage) {contextComposer(task);return;}
   $('chat-text').placeholder='Ответить можно в карточке задачи';
   $('chat-availability').textContent='Не подключено';
   $('role-explanation').textContent=state.role==='user' ? 'В этой роли прямой ввод недоступен. Ответить на запрос можно в доступной карточке задачи.' : 'Свободный диалог ещё не подключён. Ответы и комментарии сохраняются в доступных карточках задач.';
-  $('chat-text').disabled=true;$('chat-send').disabled=true;
+  $('chat-text').value='';$('chat-text').disabled=true;$('chat-send').disabled=true;
   $('chat-status').textContent='';
 }
 async function refreshAtlasTask() {
@@ -709,3 +714,100 @@ window.addEventListener('resize',()=>{
   if(!narrow && atlasWasNarrow && document.activeElement?.id==='dialog-close') $('dialog-toggle').focus({preventScroll:true});
   atlasWasNarrow=narrow;
 });
+
+
+function clientConversationForm(item) {
+  const key='client:'+item.id;
+  let draft=state.drafts.get(key);if(!draft) {draft={text:'',frozen:null,saving:false};state.drafts.set(key,draft);}
+  const section=node('section','detail-section');section.append(node('h3','','Обсудить предложение с Creative'));
+  const form=node('form','client-conversation-form'),label=node('label','','Запрос по этому клиенту');label.htmlFor='client-conversation-text';
+  const input=node('textarea');input.id='client-conversation-text';input.maxLength=4000;input.required=true;input.value=draft.text;input.readOnly=!!draft.frozen;
+  input.addEventListener('input',()=>{draft.text=input.value;});
+  const submit=node('button','primary-button',draft.frozen ? 'Повторить тот же запрос' : 'Открыть диалог и отправить');submit.type='submit';submit.disabled=draft.saving;
+  const status=node('p','connection-status');status.setAttribute('role','status');
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(draft.saving)return;draft.saving=true;submit.disabled=true;input.readOnly=true;
+    const session=state.session;
+    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),text:draft.text};
+    try {
+      const {data}=await api('/api/clients/'+encodeURIComponent(item.id)+'/conversation',{body:draft.frozen});
+      if(session!==state.session)return;
+      state.drafts.delete(key);
+      if(state.modal?.kind==='client' && state.modal.id===item.id)openClientTask(data.id);
+      loadAppTasks();
+    } catch(error) {
+      if(session!==state.session)return;
+      if(error.status===401){resetSession(errorText(error));return;}
+      if([400,403,404,409,413,415].includes(error.status)){draft.frozen=null;input.readOnly=false;}
+      status.textContent=draft.frozen ? 'Результат неизвестен. Текст сохранён; повтор использует тот же запрос.' : errorText(error);
+      submit.textContent=draft.frozen ? 'Повторить тот же запрос' : 'Отправить снова';
+    } finally {draft.saving=false;submit.disabled=false;}
+  });
+  form.append(label,input,submit,status);section.append(form,node('p','detail-note','Только разрешённый клиент и закреплённый Creative. Это не отправка предложения клиенту.'));return section;
+}
+
+function proposalEditor(item) {
+  const section=node('section','proposal-editor');section.dataset.proposalTask=item.id;
+  section.append(node('h3','','Предложение · внутренний черновик'));
+  const current=item.proposal;
+  if(!current){section.append(node('p','','Агент пока не вернул черновик. Цены, наличие и условия не подтверждены.'));return section;}
+  section.append(node('p','detail-note','Версия '+current.revision+' · '+current.author+' · исходное сообщение '+current.source_message),node('pre','proposal-current',current.body));
+  if(!item.conversation.canEditProposal)return section;
+  const key='proposal:'+item.id;
+  let draft=state.drafts.get(key);
+  if(draft && !draft.dirty && !draft.frozen && !draft.saving && draft.baseRevision!==current.revision)draft=null;
+  if(!draft){draft={title:current.title,body:current.body,baseRevision:current.revision,frozen:null,saving:false,dirty:false};state.drafts.set(key,draft);}
+  if(draft.baseRevision!==current.revision) {
+    section.append(node('p','proposal-conflict','На сервере новая версия. Ваш текст сохранён и не перезаписан.'),button('Загрузить текущую версию вместо черновика',()=>{state.drafts.delete(key);renderAppTask(item);}));
+  }
+  const form=node('form','proposal-form'),title=node('input'),body=node('textarea'),save=node('button','primary-button',draft.frozen ? 'Повторить сохранение версии' : 'Сохранить новую версию'),status=node('p','connection-status');
+  title.id='proposal-title';title.value=draft.title;title.maxLength=240;title.required=true;
+  body.id='proposal-body';body.value=draft.body;body.maxLength=8000;body.required=true;body.rows=8;
+  const titleLabel=node('label','','Заголовок черновика');titleLabel.htmlFor=title.id;
+  const bodyLabel=node('label','','Текст предложения');bodyLabel.htmlFor=body.id;
+  save.type='submit';save.disabled=draft.saving;title.readOnly=body.readOnly=!!draft.frozen;
+  title.addEventListener('input',()=>{draft.title=title.value;draft.dirty=true;});body.addEventListener('input',()=>{draft.body=body.value;draft.dirty=true;});
+  status.setAttribute('role','status');
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(draft.saving)return;draft.saving=true;save.disabled=true;title.readOnly=body.readOnly=true;
+    const session=state.session;
+    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),baseRevision:draft.baseRevision,title:draft.title,body:draft.body};
+    try {
+      await api('/api/board-tasks/'+encodeURIComponent(item.id)+'/proposal',{body:draft.frozen});
+      if(session!==state.session)return;state.drafts.delete(key);
+      if(state.modal?.kind==='app' && state.modal.id===item.id)await loadDetail();
+    } catch(error) {
+      if(session!==state.session)return;
+      if([400,403,404,409,413,415].includes(error.status)){draft.frozen=null;title.readOnly=body.readOnly=false;}
+      status.textContent=error.status===409 ? 'Версия изменилась. Ваш текст сохранён; обновите обсуждение и сравните версии.' : draft.frozen ? 'Сохранение неизвестно. Повтор использует тот же ключ.' : errorText(error);
+    } finally {draft.saving=false;save.disabled=false;}
+  });
+  section.append(node('p','detail-note','Сохранение версии не отправляет предложение и не запускает бронирование. Уточнение отправляется отдельным сообщением в этом же обсуждении.'));
+  form.append(titleLabel,title,bodyLabel,body,save,status);section.append(form);return section;
+}
+
+function contextComposer(task) {
+  const key='panel:'+task.id;
+  let draft=state.drafts.get(key);if(!draft){draft={text:'',frozen:null,saving:false};state.drafts.set(key,draft);}
+  $('chat-text').placeholder='Уточнение по этому клиенту и предложению';
+  if(document.activeElement!==$('chat-text'))$('chat-text').value=draft.text;
+  $('chat-text').maxLength=4000;$('chat-text').disabled=!!draft.frozen;
+  $('chat-send').disabled=draft.saving;$('chat-availability').textContent='Контекстный диалог';
+  $('role-explanation').textContent='Разрешённое обсуждение клиента; получатель закреплён сервером. Не отправка клиенту.';
+  $('chat-text').oninput=()=>{draft.text=$('chat-text').value;};
+  $('chat-send').onclick=async()=>{
+    if(draft.saving || !draft.text.trim() || state.panelTask?.id!==task.id)return;
+    draft.saving=true;$('chat-send').disabled=true;$('chat-text').disabled=true;
+    const session=state.session;
+    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),kind:'comment',text:draft.text};
+    try {
+      await api('/api/board-tasks/'+encodeURIComponent(task.id)+'/messages',{body:draft.frozen});
+      if(session!==state.session)return;
+      state.drafts.delete(key);draft.frozen=null;draft.text='';if(state.panelTask?.id===task.id){$('chat-text').value='';await refreshAtlasTask();}
+    } catch(error) {
+      if(session!==state.session || state.panelTask?.id!==task.id)return;
+      if([400,403,404,409,413,415].includes(error.status))draft.frozen=null;
+      $('chat-status').textContent=draft.frozen ? 'Результат неизвестен. Повтор отправит тот же запрос; текст сохранён.' : errorText(error);
+    } finally {draft.saving=false;if(state.panelTask?.id===task.id){$('chat-send').disabled=false;$('chat-text').disabled=!!draft.frozen;}}
+  };
+}
