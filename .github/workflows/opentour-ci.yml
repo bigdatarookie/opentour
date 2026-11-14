@@ -93,3 +93,20 @@ jobs:
             echo "- Exit code: ${TEST_EXIT_CODE:-not recorded}"
             echo '- Detailed, verbose output is in the test step log; no output artifact is uploaded.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  confined-crm-php:
+    name: Confined CRM capability checks (synthetic PHP stubs)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+      - name: Verify candidate revision
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate_sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Check extension PHP and confined behavior without CRM or credentials
+        shell: sh
+        run: |
+          docker run --rm --pull=always --network=none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 --user "$(id -u):$(id -g)" --volume "$GITHUB_WORKSPACE:/workspace:ro" --workdir /workspace --entrypoint /bin/sh espocrm/espocrm:10.0.11@sha256:8e1c7e97e0a1a08953a86af89c3808cb95410b6a5eb487d1e3475d2c7289357d -c 'set -e; for file in extensions/espo-control/custom/Espo/Modules/OpenTourControl/Api/*.php extensions/espo-control/custom/Espo/Modules/OpenTourControl/Services/*.php extensions/espo-control/custom/Espo/Modules/OpenTourControl/Console/*.php; do php -l "$file"; done; php tests/php/control_title.php'

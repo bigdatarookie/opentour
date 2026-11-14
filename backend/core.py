@@ -117,7 +117,7 @@ def client_card(entity, obj, base):
             'kind': 'person' if entity == 'Contact' else 'organization',
             'displayName': display, 'email': obj.get('emailAddress') or None,
             'phone': obj.get('phoneNumber') or None,
-            'attributes': {'crmType': obj.get('type')} if entity == 'Account' else {},
+            'attributes': {'crmType': obj.get('type')} if entity == 'Account' else {'jobTitle':obj.get('title')},
             'surname': {'status': 'technical_placeholder_observed' if placeholder else 'source_value_or_unknown',
                         'technicalValue': 'None' if placeholder else None,
                         'deduplicationKey': False if placeholder else None},

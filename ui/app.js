@@ -443,6 +443,8 @@ function renderDetail(kind,item) {
       if (!item.relatedWork.complete) related.append(node('p','','Показана часть доступных работ.'));
     } else related.append(node('p','','Связанные работы недоступны для этого доступа или подключения.'));
     main.append(related);
+    if(item.kind==='person')main.append(detailSection('Должность / поле CRM title',item.attributes?.jobTitle || 'Не указано'));
+    if(item.titleControl?.enabled)main.append(crmTitleForm(item));
     side.append(metadata([['Тип',item.kind === 'organization' ? 'Организация' : 'Физическое лицо'],['Источник','CRM'],['Изменено',item.modifiedAt || 'Не указано']]));
     try {
       const url=new URL(item.sourceLink);
@@ -454,7 +456,7 @@ function renderDetail(kind,item) {
       const source=node('details','detail-provenance');const ref=item.provenance.import;
       source.append(node('summary','','Происхождение записи'),node('p','',`Источник: ${ref.sourceIdentity}\nСтрока: ${ref.logicalRow}\nВерсия сопоставления: ${ref.mappingVersion}`));side.append(source);
     }
-    side.append(node('div','detail-note','Изменение записей выполняется в CRM. Эта страница ничего не сохраняет и не дополняет автоматически.'));
+    side.append(node('div','detail-note','Карточка поступает из CRM. Изменение title доступно только на специально закреплённой контрольной записи; остальные поля не изменяются.'));
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
   if (kind === 'client' && state.modal?.restoreClient) {
@@ -709,3 +711,33 @@ window.addEventListener('resize',()=>{
   if(!narrow && atlasWasNarrow && document.activeElement?.id==='dialog-close') $('dialog-toggle').focus({preventScroll:true});
   atlasWasNarrow=narrow;
 });
+
+
+function crmTitleForm(item) {
+  const root=node('section','detail-section'),key='crm-title:'+item.id;
+  root.append(node('h3','','Изменить title контрольной записи'));
+  const label=node('label','','Должность / title (до 100 символов)'),input=node('input'),save=node('button','primary-button','Сохранить title'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
+  input.id='crm-control-title';input.maxLength=100;label.htmlFor=input.id;save.type='submit';status.setAttribute('role','status');
+  let draft=state.drafts.get(key);if(!draft){draft={title:item.attributes?.jobTitle || '',version:null,frozen:null,saving:false};state.drafts.set(key,draft);}
+  input.value=draft.title;input.readOnly=!!draft.frozen;save.disabled=true;reload.hidden=true;
+  input.addEventListener('input',()=>{draft.title=input.value;});
+  const form=node('form','crm-title-form');form.append(label,input,save,status,reload);root.append(form);
+  const session=state.session;
+  api('/api/clients/'+encodeURIComponent(item.id)+'/title-control').then(({data})=>{
+    if(session!==state.session || !root.isConnected)return;
+    if(!draft.frozen && !draft.version)draft.version=data.version;
+    save.disabled=draft.saving;status.textContent='Только поле title этой контрольной записи.';
+  }).catch(()=>{if(root.isConnected)status.textContent='Контрольный writer недоступен. Данные не изменены.';});
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(save.disabled || draft.saving)return;draft.saving=true;save.disabled=true;input.readOnly=true;
+    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),title:draft.title,baseVersion:draft.version};
+    try {
+      await api('/api/clients/'+encodeURIComponent(item.id)+'/title-control',{body:draft.frozen});
+      if(session!==state.session)return;state.drafts.delete(key);if(state.modal?.id===item.id)await loadDetail();
+    } catch(error) {
+      if(session!==state.session || !root.isConnected)return;
+      if([400,403,409,415].includes(error.status)){draft.frozen=null;input.readOnly=false;reload.hidden=false;status.textContent='Изменение отклонено или запись изменилась. Ваш текст сохранён; сверка заменит его текущим значением.';}
+      else {status.textContent='Результат неизвестен. Текст сохранён; повтор сверит тот же запрос.';save.textContent='Сверить и повторить тот же запрос';}
+    } finally {draft.saving=false;save.disabled=false;}
+  });return root;
+}

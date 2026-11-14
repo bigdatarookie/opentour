@@ -64,3 +64,34 @@ EspoCRM query fields and paging follow the vendor [search parameter contract](ht
 
 
 Read-only native action observation metadata is available for a known scoped original task through the existing board authorization. See [NATIVE_OBSERVATIONS.md](NATIVE_OBSERVATIONS.md) for the fixed route, source bounds, privacy projection and explicit unconfirmed identity/action semantics. This does not enable native writes or turn an audit entry into an accepted human decision.
+
+## Confined synthetic CRM title control (separate from GET access)
+
+`--crm-control-credential-file` enables only the reviewed OpenTourControlTitle
+extension capability, with private JSON `{contactId,token}`. The upstream host
+remains the fixed local CRM; no client-selected URL or native API-user key is
+accepted. Existing `--crm-credential-file` remains GET-only. App Auth additionally
+requires role administrator plus exact `crmControlTitle:["crm:Contact:<id>"]`;
+no board wildcard or CRM administrator identity is implied. Other roles and
+unlisted objects cannot use it.
+
+`GET /api/clients/crm:Contact:<id>/title-control` returns just its pinned field
+snapshot/version. `POST` at that same path accepts exactly
+`{requestId,title,baseVersion}`. The backend derives the operation identity from
+server-authenticated actor + object + stable requestId; author/record/entity/
+field/host overrides are forbidden. It reconciles the native operation receipt
+before any POST and never automatically POSTs a second time after uncertainty.
+Opaque field-version conflicts return409. Unknown outcomes preserve the UI's
+same frozen payload/key; explicit retry reads the exact receipt. CRM card reads
+expose native title as attributes.jobTitle; no Contact.status/Stream write or
+import-description change is introduced. The control form is absent unless the
+explicit role/object capability is available.
+
+This branch is based on accepted mainca4b1d9 and leaves PR23's separately reviewed
+client-conversation/proposal candidate untouched. The two source features share
+backend/UI seams and must be reconciled through normal reviewed integration,
+not by rewriting either pinned candidate. No new BoardStore schema is required.
+Configuration/adoption, one-time synthetic Contact bootstrap, exact upstream
+confinement and remaining real-ORM acceptance are described in
+[the extension contract](../extensions/espo-control/README.md). No live module,
+Contact/user/key, private grant or running backend was changed by source work.
