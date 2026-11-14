@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "cOpenTourControlTitle": {
+      "type": "varchar",
+      "maxLength": 100,
+      "notStorable": false,
+      "readOnly": true,
+      "exportDisabled": true,
+      "importDisabled": true
+    }
+  }
+}

@@ -2,12 +2,23 @@
 namespace Espo\Modules\OpenTourControl\Services;
 
 use Espo\Core\ORM\EntityManager;
+use Espo\Core\Utils\Metadata;
 use Espo\Core\Exceptions\{BadRequest,Forbidden,Conflict,NotFound};
 
 /** A capability for one synthetic Contact.title, not an Espo API-user credential. */
 class TitleControl
 {
-    public function __construct(private EntityManager $em) {}
+    public const FIELD = 'cOpenTourControlTitle';
+    public function __construct(private EntityManager $em, Metadata $metadata) {self::requireStorage($metadata);}
+
+    public static function requireStorage(Metadata $metadata): void
+    {
+        $path=['entityDefs','Contact','fields',self::FIELD];
+        if ($metadata->get([...$path,'type'])!=='varchar' || $metadata->get([...$path,'maxLength'])!==100
+            || $metadata->get([...$path,'notStorable'])!==false || $metadata->get([...$path,'select'])!==null) {
+            throw new Forbidden('control_storage_not_installed');
+        }
+    }
 
     public static function privateJson(string $file): object
     {
@@ -41,8 +52,8 @@ class TitleControl
 
     private function snapshot($contact): array
     {
-        $data=['entity'=>'Contact','id'=>$contact->getId(),'title'=>$contact->get('title') ?? ''];
-        $data['version']=hash('sha256',json_encode([$data['id'],$data['title'],$contact->get('modifiedAt')],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
+        $data=['entity'=>'Contact','id'=>$contact->getId(),'field'=>self::FIELD,'title'=>$contact->get(self::FIELD) ?? ''];
+        $data['version']=hash('sha256',json_encode([self::FIELD,$data['id'],$data['title'],$contact->get('modifiedAt')],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
         return $data;
     }
 
@@ -57,14 +68,14 @@ class TitleControl
 
     private function receiptId(string $operation): string
     {
-        return substr(hash('sha256','OpenTourControlTitle:'.$operation),0,17);
+        return substr(hash('sha256','OpenTourControlTitle:'.self::FIELD.':'.$operation),0,17);
     }
 
     private function receipt(string $operation): ?object
     {
         $row=$this->em->getEntityById('UniqueId',$this->receiptId($operation));
         if (!$row) return null;
-        if ($row->get('name')!=='OpenTourControlTitle:'.$operation) throw new Conflict('control_receipt_collision');
+        if ($row->get('name')!=='OpenTourControlTitle:'.self::FIELD.':'.$operation) throw new Conflict('control_receipt_collision');
         return $row->get('data');
     }
 
@@ -74,7 +85,7 @@ class TitleControl
     {
         if (!preg_match('/^[a-f0-9]{64}$/D',$operation)) throw new BadRequest('control_operation_invalid');
         $data=$this->receipt($operation);
-        if (!$data || ($data->result->id ?? null)!==$config->contactId) throw new NotFound('control_operation_not_found');
+        if (!$data || ($data->result->id ?? null)!==$config->contactId || ($data->result->field ?? null)!==self::FIELD) throw new NotFound('control_operation_not_found');
         return (array)$data->result;
     }
 
@@ -96,12 +107,14 @@ class TitleControl
                 return (array)$existing->result;
             }
             if ($this->snapshot($contact)['version']!==$body->baseVersion) throw new Conflict('control_version_conflict');
-            $contact->set('title',$body->title); // No generic entity, ID or field from the caller.
+            $contact->set(self::FIELD,$body->title); // No generic entity, ID or field from the caller.
             $this->em->saveEntity($contact,['skipHooks'=>true]); // Synthetic control: suppress unrelated business hooks; normal audit timestamps remain.
-            $result=$this->snapshot($contact)+['operationId'=>$body->operationId,'saved'=>true,'baseVersion'=>$body->baseVersion,'actor'=>$body->actor];
+            $stored=$this->contact($config);
+            if (($stored->get(self::FIELD) ?? '')!==$body->title) throw new Conflict('control_storage_verification_failed');
+            $result=$this->snapshot($stored)+['operationId'=>$body->operationId,'saved'=>true,'baseVersion'=>$body->baseVersion,'actor'=>$body->actor];
             $receipt=$this->em->getNewEntity('UniqueId');
             $receipt->set('id',$this->receiptId($body->operationId));
-            $receipt->set('name','OpenTourControlTitle:'.$body->operationId);
+            $receipt->set('name','OpenTourControlTitle:'.self::FIELD.':'.$body->operationId);
             $receipt->set('data',(object)['digest'=>$digest,'result'=>(object)$result]);
             // Null terminateAt keeps the existing system receipt until explicit safe cleanup.
             $this->em->saveEntity($receipt);

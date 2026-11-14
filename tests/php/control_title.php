@@ -1,6 +1,9 @@
 <?php
 // Test doubles only. Production code uses the inspected Espo10.0.11 interfaces/ORM.
 namespace Espo\Core\Exceptions {class BadRequest extends \Exception {} class Forbidden extends \Exception {} class Conflict extends \Exception {} class NotFound extends \Exception {}}
+namespace Espo\Core\Utils {
+ class Metadata {public function __construct(private array $data){} public function get($path){$node=$this->data;foreach($path as $key){if(!is_array($node) || !array_key_exists($key,$node))return null;$node=$node[$key];}return $node;}}
+}
 namespace Espo\Core\Api {
  interface Request {} interface Action {public function process(Request $request):Response;}
  class Response {public function __construct(public $data){} public function setHeader($k,$v){return $this;}}
@@ -46,12 +49,14 @@ namespace {
  function denied($name,$class,$fn){try{$fn();}catch(\Throwable $error){check($name,$error instanceof $class);return;}throw new \RuntimeException('not denied '.$name);}
  function privateFile($path,$data){file_put_contents($path,json_encode($data));chmod($path,0600);}
  $temp=sys_get_temp_dir().'/opentour-capability-test-'.bin2hex(random_bytes(6));mkdir($temp,0700);mkdir($temp.'/data',0700);chdir($temp);
+ $metadata=new \Espo\Core\Utils\Metadata(['entityDefs'=>['Contact'=>json_decode(file_get_contents($module.'/Resources/metadata/entityDefs/Contact.json'),true)]]);
  $em=new EntityManager();$token=str_repeat('syntheticToken',4);$nonce=str_repeat('syntheticNonce',4);
  try {
-  $control=new TitleControl($em);
+  $control=new TitleControl($em,$metadata);
+  denied('missing-storage-metadata-denies',Forbidden::class,fn()=>new TitleControl($em,new \Espo\Core\Utils\Metadata([])));
   denied('missing-config-denies',Forbidden::class,fn()=>$control->authorize($token));
   privateFile('data/opentour-control-bootstrap.json',(object)['nonce'=>$nonce,'token'=>$token]);
-  $bootstrap=new Bootstrap($em);$io=new \Espo\Core\Console\IO();$params=new \Espo\Core\Console\Command\Params();
+  $bootstrap=new Bootstrap($em,$metadata);$io=new \Espo\Core\Console\IO();$params=new \Espo\Core\Console\Command\Params();
   $em->failReceipt=true;denied('bootstrap-receipt-failure-rolls-back',\RuntimeException::class,fn()=>$bootstrap->run($params,$io));$em->failReceipt=false;
   check('bootstrap-failure-created-no-contact',empty($em->rows['Contact']));
   $bootstrap->run($params,$io);$bootstrap->run($params,$io);
@@ -62,6 +67,9 @@ namespace {
   check('conflicting-bootstrap-left-one-contact',count($em->rows['Contact'])===1);
   privateFile('data/opentour-control-bootstrap.json',(object)['nonce'=>$nonce,'token'=>$token]);
   $config=$control->authorize($token);$initial=$control->read($config);
+  $metadata=json_decode(file_get_contents($module.'/Resources/metadata/entityDefs/Contact.json'),true);
+  check('explicit-storable-control-field',$metadata['fields'][TitleControl::FIELD]['type']==='varchar' && $metadata['fields'][TitleControl::FIELD]['notStorable']===false && $metadata['fields'][TitleControl::FIELD]['maxLength']===100);
+  check('native-title-metadata-not-overridden',!isset($metadata['fields']['title']));
   check('bootstrap-pins-generated-synthetic-record',$initial['id']===$config->contactId && $initial['title']==='');
   denied('wrong-capability-denies',Forbidden::class,fn()=>$control->authorize(str_repeat('x',40)));
   chmod('data/opentour-control.json',0644);denied('nonprivate-config-denies',Forbidden::class,fn()=>$control->authorize($token));chmod('data/opentour-control.json',0600);
@@ -87,7 +95,7 @@ namespace {
    public function getBodyContents(){return json_encode($this->body);}public function getParsedBody(){return $this->body;}
   }
   $api=new Title($control);$request=new Req();$request->headers=['X-OpenTour-Control'=>$token];
-  check('capability-api-read-only-pinned-fields',array_keys($api->process($request)->data)===['entity','id','title','version']);
+  check('capability-api-read-only-pinned-fields',array_keys($api->process($request)->data)===['entity','id','field','title','version']);
   foreach(['X-Api-Key','Authorization','Espo-Authorization','X-Hmac-Authorization'] as $header){$bad=clone $request;$bad->headers[$header]='synthetic-native-auth';denied('native-auth-'.$header.'-denies',Forbidden::class,fn()=>$api->process($bad));}
   $bad=clone $request;$bad->query=['entity'=>'Account'];denied('query-overrides-deny',Forbidden::class,fn()=>$api->process($bad));
   $bad=clone $request;$bad->method='DELETE';denied('delete-denies',Forbidden::class,fn()=>$api->process($bad));

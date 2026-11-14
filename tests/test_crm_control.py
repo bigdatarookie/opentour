@@ -57,7 +57,7 @@ class ControlTests(unittest.TestCase):
         self.scope=(CLIENT,)
 
     def close(self):self.upstream.shutdown();self.upstream.server_close();self.thread.join()
-    def snapshot(self):return {'entity':'Contact','id':ID,'title':self.title,'version':hashlib.sha256(str(self.revision).encode()).hexdigest()}
+    def snapshot(self):return {'entity':'Contact','id':ID,'field':'cOpenTourControlTitle','title':self.title,'version':hashlib.sha256(str(self.revision).encode()).hexdigest()}
     def body(self,request='synthetic-edit-001',**extra):return {'requestId':request,'title':'Updated synthetic title','baseVersion':self.snapshot()['version'],**extra}
     def failure(self,code,fn):
         with self.assertRaises(Failure) as caught:fn()
@@ -68,12 +68,16 @@ class ControlTests(unittest.TestCase):
         from backend.adapters import CRM_FIELDS
         from test_backend import CRMFixture,NativeFixture
         crm=CRMFixture()
-        for index,record in enumerate(crm.records['Contact']):record['title']='SYNTHETIC PRIVATE TITLE '+str(index)
+        for index,record in enumerate(crm.records['Contact']):
+            record['title']='SYNTHETIC PRIVATE TITLE '+str(index)
+            record['cOpenTourControlTitle']='SYNTHETIC CONTROL VALUE '+str(index)
         service=Service(crm,NativeFixture())
         listing=service.clients({'kind':'person','limit':'2'})
         detail=service.client('crm:Contact:'+crm.records['Contact'][0]['id'])
         self.assertNotIn('jobTitle',json.dumps([listing,detail]))
         self.assertNotIn('SYNTHETIC PRIVATE TITLE',json.dumps([listing,detail]))
+        self.assertNotIn('SYNTHETIC CONTROL VALUE',json.dumps([listing,detail]))
+        self.assertNotIn('cOpenTourControlTitle',CRM_FIELDS.split(','))
         self.assertNotIn('title',CRM_FIELDS.split(','))
 
     def test_correct_edit_reload_stable_retry_and_field_is_only_title(self):

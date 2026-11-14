@@ -208,3 +208,14 @@ Configuration/adoption, one-time synthetic Contact bootstrap, exact upstream
 confinement and remaining real-ORM acceptance are described in
 [the extension contract](../extensions/espo-control/README.md). No live module,
 Contact/user/key, private grant or running backend was changed by source work.
+
+Storage correction: native Contact.title is a non-storable Account relationship
+role in Espo10.0.11. This capability instead stores only the explicitly declared
+`cOpenTourControlTitle` varchar100 control label, after a supported metadata
+rebuild. The API's legacy `title` property is only the scalar transport alias;
+responses must identify the actual custom field and backend validation enforces
+it. The UI labels it as a control label, not an occupation/relationship title.
+No general list/card projection includes either native title or the custom
+field. Storage-bound versions/receipts prevent old false virtual-title receipts
+from replaying as new storage success. See the extension migration/regression
+contract; do not manually add SQL columns or alter relationship roles.

@@ -1,6 +1,6 @@
 # Confined synthetic Contact.title capability (source only)
 
-This is a reviewed-source candidate for a narrow EspoCRM custom API action and
+This is a source candidate for a narrow EspoCRM custom API action and
 OS-operator bootstrap command. It does not install itself, create an API user,
 change Roles/mandatory ACL, access existing records, or turn the current GET
 identity into a writer. No native CRM integration or effective deployed ACL is
@@ -13,8 +13,12 @@ Espo10.0.11 setup. This module instead recognizes a separate random capability
 only in three fixed custom routes: GET/POST `OpenTourControlTitle`, and GET
 `OpenTourControlTitle/status/<operation>`. No arbitrary entity/ID/field/host is
 accepted. The server-owned binding pins one Contact, verifies its exact synthetic
-marker, and permits only caller-selected `title` (string, at most100 Unicode
-characters, no control characters). CRM's ordinary created/modified metadata is
+marker, and permits only caller-selected control text (string, at most100 Unicode
+characters, no control characters), stored in the explicitly declared storable
+`Contact.cOpenTourControlTitle` field. Native `Contact.title` is not used: in
+10.0.11 it is a non-storable display of the primary Account relationship role.
+The transport property/route name `title` is retained only as a capability API
+label; responses include `field: cOpenTourControlTitle`, checked by the backend. CRM's ordinary created/modified metadata is
 maintained. Control saves explicitly skip business hooks, using the inspected
 supported save option, so custom workflow/notification hooks are not requested.
 There is no public create/delete/Stream endpoint.
@@ -50,13 +54,17 @@ version. Relevant official sources:
 - [Repository save/hook options](https://github.com/espocrm/espocrm/blob/32d559ba86d3be607599d1325c359668c1178850/application/Espo/Core/Repositories/Database.php)
 
 The existing internal `UniqueId` entity stores namespaced idempotency receipts
-in the **same DB transaction** as title changes or bootstrap creation. No new
-CRM or BoardStore schema/table, task queue or API user is introduced. Its null
+in the **same DB transaction** as title changes or bootstrap creation. No new table, BoardStore schema, task queue or API user is introduced. The
+supported CRM metadata rebuild adds one nullable varchar100 control column on
+Contact; it does not redefine the built-in title or relationship role. Its null
 terminateAt prevents ordinary expiry cleanup; retain these receipts while
 requests can be retried. The short native primary ID is accompanied by the full
 namespace/operation name; collisions refuse rather than overwrite an unrelated
-row. CAS locks the exact Contact row, checks the opaque current field/version,
-then stores title and receipt atomically. Same operation/input returns the
+row. CAS locks the exact Contact row, checks the opaque current control-field/version,
+then stores the custom value, reads it back through ORM in the same transaction,
+and only then records success. Missing/stale non-storable metadata fails before
+bootstrap or API work. Versions and receipt namespaces include the storage field;
+old virtual-title receipts are preserved but cannot acknowledge the new field. Same operation/input returns the
 original receipt; changed content or stale version is409. A receipt-write failure
 rolls back the title. Concurrent same-key inserts rely on the native unique
 primary key plus the CRM transaction rollback, not a Python mock guarantee.
@@ -142,3 +150,40 @@ interface/ORM stubs in the digest-pinned Espo image, read-only/no-network/withou
 CRM/config/credentials. The browser uses only a disposable profile and a
 synthetic denied-by-default upstream. These are affected source checks, not
 live Espo ACL/ORM integration or deployment acceptance.
+
+## Storage migration and real regression (repair of non-storable title)
+
+The module's Contact entityDefs declares only `cOpenTourControlTitle`: varchar,
+maxLength100, notStorable=false, readOnly=true, import/export disabled. These
+metadata UI/service hints are not a replacement for the capability boundary.
+Do not override native Contact.title/select/notStorable or AccountContact.role.
+Install the exact module metadata with the PHP files, then use supported
+`bin/command rebuild` in the authorized isolated instance; no hand-created SQL
+column or owner schema workaround. Back up metadata/DB before later reviewed
+live adoption. Keep new control data/receipts on rollback: disable capability and
+routes; do not remove the field/column or run a destructive rebuild while data
+or an effect is unknown. Existing unrelated business fields remain unchanged.
+
+The existing QA-owned stock10.0.11 instance is reused. QA explicitly permits one
+synthetic Account and a nonempty relation to the already marked control Contact,
+created only through native ORM. The repository test
+`tools/php/crm_control_storage_regression.php` requires the exact disposable
+project acknowledgement before loading the application. After candidate module
+copy + native rebuild/bootstrap, copy this test outside the production module
+and execute it as the runtime PHP user with:
+
+```sh
+OPENTOUR_DISPOSABLE_CRM_TEST=opentour-pr24-qa-20261114-8fd750 php /tmp/crm_control_storage_regression.php
+```
+
+This is **only** a task-owned disposable fixture invocation, never an owner-service
+command. The test checks declared storage/native-title metadata, replays the
+bootstrap without another Contact, preserves/ignores the earlier invalid receipt,
+sets up a visibly synthetic Account/role via ORM, performs the confined write,
+and reads it through a fresh application/EntityManager. It compares all fetched
+business attributes and relationship role before/after (excluding only the new
+field and standard modified audit fields), then replays the exact saved request
+without another receipt or Contact change. A private stable request file prevents
+blind fresh-key writes after a test interruption. No manual SQL/DDL is used and
+output contains named assertions/counts, no field values or capability. QA owns
+the run and exact-head report; a PHP lint or stub PASS alone is not its result.

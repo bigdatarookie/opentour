@@ -457,7 +457,7 @@ function renderDetail(kind,item) {
       const source=node('details','detail-provenance');const ref=item.provenance.import;
       source.append(node('summary','','Происхождение записи'),node('p','',`Источник: ${ref.sourceIdentity}\nСтрока: ${ref.logicalRow}\nВерсия сопоставления: ${ref.mappingVersion}`));side.append(source);
     }
-    side.append(node('div','detail-note','Карточка поступает из CRM; контрольное поле title меняется только на закреплённой записи. Обсуждение и черновик предложения сохраняются отдельно в OpenTour; отправка и бронирование не выполняются.'));
+    side.append(node('div','detail-note','Карточка поступает из CRM; контрольная метка меняется только на закреплённой записи. Обсуждение и черновик предложения сохраняются отдельно в OpenTour; отправка и бронирование не выполняются.'));
   }
   grid.append(main,side);$('detail-body').replaceChildren(grid);$('detail-body').scrollTop=scroll;
   if (kind === 'client' && state.modal?.restoreClient) {
@@ -719,8 +719,8 @@ window.addEventListener('resize',()=>{
 
 function crmTitleForm(item) {
   const root=node('section','detail-section'),key='crm-title:'+item.id;
-  root.append(node('h3','','Изменить title контрольной записи'));
-  const label=node('label','','Должность / title (до 100 символов)'),input=node('input'),save=node('button','primary-button','Сохранить title'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
+  root.append(node('h3','','Изменить контрольную метку CRM'));
+  const label=node('label','','Контрольная метка (до 100 символов)'),input=node('input'),save=node('button','primary-button','Сохранить метку'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
   input.id='crm-control-title';input.maxLength=100;label.htmlFor=input.id;save.type='submit';status.setAttribute('role','status');
   let draft=state.drafts.get(key);if(!draft){draft={title:'',version:null,frozen:null,saving:false};state.drafts.set(key,draft);}
   input.value=draft.title;input.readOnly=true;save.disabled=true;reload.hidden=true;
@@ -730,7 +730,7 @@ function crmTitleForm(item) {
   api('/api/clients/'+encodeURIComponent(item.id)+'/title-control').then(({data})=>{
     if(session!==state.session || !root.isConnected)return;
     if(!draft.frozen && !draft.version){draft.version=data.version;draft.title=data.title;input.value=draft.title;}
-    input.readOnly=!!draft.frozen;save.disabled=draft.saving;status.textContent='Только поле title этой контрольной записи.';
+    input.readOnly=!!draft.frozen;save.disabled=draft.saving;status.textContent='Только отдельная контрольная метка этой записи.';
   }).catch(()=>{if(root.isConnected)status.textContent='Контрольный writer недоступен. Данные не изменены.';});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(save.disabled || draft.saving)return;draft.saving=true;save.disabled=true;input.readOnly=true;

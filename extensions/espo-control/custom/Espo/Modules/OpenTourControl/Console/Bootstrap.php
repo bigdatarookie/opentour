@@ -3,13 +3,14 @@ namespace Espo\Modules\OpenTourControl\Console;
 use Espo\Core\Console\{Command,IO};
 use Espo\Core\Console\Command\Params;
 use Espo\Core\ORM\EntityManager;
+use Espo\Core\Utils\Metadata;
 use Espo\Core\Exceptions\{Forbidden,Conflict};
 use Espo\Modules\OpenTourControl\Services\TitleControl;
 
 /** Explicit OS-operator command; no web create endpoint and no admin password/API key. */
 class Bootstrap implements Command
 {
-    public function __construct(private EntityManager $em) {}
+    public function __construct(private EntityManager $em, Metadata $metadata) {TitleControl::requireStorage($metadata);}
     private function writePrivate(string $path, object $data): void
     {
         if (file_exists($path)) {
@@ -46,7 +47,7 @@ class Bootstrap implements Command
             }
             if (file_exists('data/opentour-control.json') || file_exists('data/opentour-control-writer.json')) throw new Conflict('control_already_bootstrapped');
             $contact=$this->em->getNewEntity('Contact');
-            $contact->set(['firstName'=>'OpenTour','lastName'=>'SYNTHETIC CONTROL','description'=>$marker,'title'=>'']);
+            $contact->set(['firstName'=>'OpenTour','lastName'=>'SYNTHETIC CONTROL','description'=>$marker,TitleControl::FIELD=>'']);
             $this->em->saveEntity($contact,['skipHooks'=>true]); // Synthetic control: suppress unrelated business hooks; normal audit timestamps remain.
             $receipt=$this->em->getNewEntity('UniqueId');$receipt->set('id',$id);$receipt->set('name',$name);
             $receipt->set('data',(object)['tokenSha256'=>$tokenHash,'contactId'=>$contact->getId()]);

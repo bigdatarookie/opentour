@@ -8,6 +8,8 @@ import urllib.request
 from .adapters import Failure, JsonGET, private_json
 from .core import PROJECT
 
+CONTROL_FIELD='cOpenTourControlTitle'
+
 
 def title_scope(auth, principal, authorization):
     # Extend the existing server-owned bearer grant; no new browser identity mechanism.
@@ -64,7 +66,7 @@ class CRMTitleControl:
             raise Failure('crm_control_effect_unknown' if method=='POST' else 'crm_control_read_unavailable',503) from None
 
     def _snapshot(self, config, data, operation=None, title=None):
-        if (not isinstance(data,dict) or data.get('entity')!='Contact' or data.get('id')!=config['contactId']
+        if (not isinstance(data,dict) or data.get('entity')!='Contact' or data.get('id')!=config['contactId'] or data.get('field')!=CONTROL_FIELD
                 or not isinstance(data.get('title'),str) or len(data['title'])>100
                 or not isinstance(data.get('version'),str) or not re.fullmatch(r'[a-f0-9]{64}',data['version'])
                 or (operation is not None and (data.get('operationId')!=operation or data.get('saved') is not True or data['title']!=title))):
