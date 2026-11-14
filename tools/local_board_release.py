@@ -472,7 +472,8 @@ def stage_release(repo: Path, revision: str, release_root: Path) -> tuple[Path, 
 
 def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
                          auth_file: Path, database: Path, output_dir: Path,
-                         crm_credential_file: Path | None = None, client_controls_file: Path | None = None) -> list[Path]:
+                         crm_credential_file: Path | None = None, client_controls_file: Path | None = None,
+                         crm_control_credential_file: Path | None = None) -> list[Path]:
     """Render and parse two plist fixtures; deliberately never loads them."""
     release_dir = release_dir.expanduser().absolute()
     app_root = _outside_checkout(app_root)
@@ -493,7 +494,7 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
         "server": ("backend.server", ["--port", "18083", "--auth-file", str(auth_file), "--board-db", str(database)]),
         "worker": ("backend.context_delivery", ["--board-db", str(database), "--serve", "--service", "--interval", "2", "--limit", "20"]),
     }
-    references={"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file}
+    references={"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file,"--crm-control-credential-file":crm_control_credential_file}
     for flag, reference in references.items():
         if reference is not None:specs['server'][1].extend([flag,str(_private_file(reference.expanduser().absolute()))])
     paths = []
@@ -519,13 +520,14 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
             stream.flush()
             os.fsync(stream.fileno())
         paths.append(path)
-    validate_launch_agents(paths, release_dir, database, auth_file,crm_credential_file,client_controls_file)
+    validate_launch_agents(paths, release_dir, database, auth_file,crm_credential_file,client_controls_file,crm_control_credential_file)
     _fsync_dir(output_dir)
     return paths
 
 
 def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path, auth_file: Path,
-                          crm_credential_file: Path | None = None, client_controls_file: Path | None = None) -> dict:
+                          crm_credential_file: Path | None = None, client_controls_file: Path | None = None,
+                         crm_control_credential_file: Path | None = None) -> dict:
     if len(paths) != 2:
         raise ReleaseError("exactly_two_launch_agents_required")
     records = []
@@ -555,7 +557,7 @@ def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path,
         if role == "server":
             if "--auth-file" not in args or args[args.index("--auth-file") + 1] != str(auth_file):
                 raise ReleaseError("launch_agent_auth_reference_mismatch")
-            for flag,reference in {"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file}.items():
+            for flag,reference in {"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file,"--crm-control-credential-file":crm_control_credential_file}.items():
                 if reference is None:
                     if flag in args:raise ReleaseError("release_profile_must_not_add_crm_credentials" if flag=="--crm-credential-file" else "release_profile_unexpected_client_controls")
                 elif (args.count(flag)!=1 or args.index(flag)+1>=len(args)
@@ -610,6 +612,7 @@ def main(argv=None) -> int:
     agents.add_argument("--output-dir", type=Path, required=True)
     agents.add_argument("--crm-credential-file", type=Path, help="Explicit existing private GET-only CRM reference; contents never read by renderer")
     agents.add_argument("--client-controls-file", type=Path, help="Explicit private exact client/obligation bindings; contents never read by renderer")
+    agents.add_argument("--crm-control-credential-file", type=Path, help="Separate exact Contact.title capability reference; never the GET API key/admin credential")
     inspect = sub.add_parser("inspect", help="read schema, integrity and aggregate table counts")
     inspect.add_argument("--database", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -627,9 +630,9 @@ def main(argv=None) -> int:
             result = restore_fn(args.database, args.backup, args.assert_services_stopped)
         elif args.command == "render-agents":
             paths = render_launch_agents(args.release_dir, args.app_root, args.python,
-                                         args.auth_file, args.database, args.output_dir,args.crm_credential_file,args.client_controls_file)
+                                         args.auth_file, args.database, args.output_dir,args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file)
             result = {"plists": [str(path) for path in paths],
-                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute(),args.crm_credential_file,args.client_controls_file)}
+                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute(),args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file)}
         else:
             result = inspect_database(args.database)
     except (ReleaseError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:

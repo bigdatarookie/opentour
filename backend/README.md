@@ -178,3 +178,44 @@ is not actual-agent integration acceptance. Creative's independent v016 scenario
 uses budget60000RUB as a fictional customer ceiling, not supplier price; price,
 availability and terms remain UNKNOWN. Independent integration must obtain real
 useful replies and a second revised draft on authorized control objects.
+
+## Confined synthetic CRM title control (separate from GET access)
+
+`--crm-control-credential-file` enables only the reviewed OpenTourControlTitle
+extension capability, with private JSON `{contactId,token}`. The upstream host
+remains the fixed local CRM; no client-selected URL or native API-user key is
+accepted. Existing `--crm-credential-file` remains GET-only. App Auth additionally
+requires role administrator plus exact `crmControlTitle:["crm:Contact:<id>"]`;
+no board wildcard or CRM administrator identity is implied. Other roles and
+unlisted objects cannot use it.
+
+`GET /api/clients/crm:Contact:<id>/title-control` returns just its pinned field
+snapshot/version. `POST` at that same path accepts exactly
+`{requestId,title,baseVersion}`. The backend derives the operation identity from
+server-authenticated actor + object + stable requestId; author/record/entity/
+field/host overrides are forbidden. It reconciles the native operation receipt
+before any POST and never automatically POSTs a second time after uncertainty.
+Opaque field-version conflicts return409. Unknown outcomes preserve the UI's
+same frozen payload/key; explicit retry reads the exact receipt. General CRM list/card reads never project title. Only the explicitly scoped
+control response populates its editor/display; no Contact.status/Stream write or
+import-description change is introduced. The control form is absent unless the
+explicit role/object capability is available.
+
+This branch incorporates accepted PR23 merge ef89a21 from main without
+changing its pinned candidate or history. Both scoped client conversations and
+the independent title capability remain available in the combined backend/UI. No new BoardStore schema is required.
+Configuration/adoption, one-time synthetic Contact bootstrap, exact upstream
+confinement and remaining real-ORM acceptance are described in
+[the extension contract](../extensions/espo-control/README.md). No live module,
+Contact/user/key, private grant or running backend was changed by source work.
+
+Storage correction: native Contact.title is a non-storable Account relationship
+role in Espo10.0.11. This capability instead stores only the explicitly declared
+`cOpenTourControlTitle` varchar100 control label, after a supported metadata
+rebuild. The API's legacy `title` property is only the scalar transport alias;
+responses must identify the actual custom field and backend validation enforces
+it. The UI labels it as a control label, not an occupation/relationship title.
+No general list/card projection includes either native title or the custom
+field. Storage-bound versions/receipts prevent old false virtual-title receipts
+from replaying as new storage success. See the extension migration/regression
+contract; do not manually add SQL columns or alter relationship roles.

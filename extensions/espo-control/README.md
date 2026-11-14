@@ -1,0 +1,229 @@
+# Confined synthetic Contact control-label capability (source only)
+
+This is a source candidate for a narrow EspoCRM custom API action and
+OS-operator bootstrap command. It does not install itself, create an API user,
+change native users/Roles, access existing records, or turn the current GET
+identity into a writer. No native CRM integration or effective deployed ACL is
+claimed by the synthetic checks.
+
+## Boundary
+
+An ordinary non-admin Role cannot prove the required confinement in the observed
+Espo10.0.11 setup. This module instead recognizes a separate random capability
+only in three fixed custom routes: GET/POST `OpenTourControlTitle`, and GET
+`OpenTourControlTitle/status/<operation>`. No arbitrary entity/ID/field/host is
+accepted. The server-owned binding pins one Contact, verifies its exact synthetic
+marker, and permits only caller-selected control text (string, at most100 Unicode
+characters, no control characters), stored in the explicitly declared storable
+`Contact.cOpenTourControlTitle` field. Native `Contact.title` is not used: in
+10.0.11 it is a non-storable display of the primary Account relationship role.
+The transport property/route name `title` is retained only as a capability API
+label; responses include `field: cOpenTourControlTitle`, checked by the backend. CRM's ordinary created/modified metadata is
+maintained. Control saves explicitly skip business hooks, using the inspected
+supported save option, so custom workflow/notification hooks are not requested.
+There is no public create/delete/Stream endpoint.
+
+The route uses Espo's supported `noAuth` custom Action seam and performs its own
+constant-time capability check before DB access. Espo runs noAuth actions under
+its local system user; **the action's checks, not that system user's broad
+rights, are the confinement**. No global authentication method is registered.
+The capability is not an Espo API-key/token and cannot establish a normal native
+API user. The action rejects normal Espo auth headers even when combined with
+the capability. Broader native API rights and existing GET credentials are
+unchanged. After installation, independent QA must observe denial of ordinary
+Contact/Account/Note/Attachment/EmailAccount/Stream routes using this capability,
+not infer it from Role labels or this source-only report.
+
+The app adds another check: existing bearer Auth must identify an application
+`administrator` with explicit `crmControlTitle: ["crm:Contact:<pinned-id>"]`.
+That application role is **not** a CRM administrator credential. An ordinary
+app user, wrong record/entity, missing scope or extra field is denied. Technical
+capability possession is service attribution, never a named human identity.
+Backend control requests use only `X-OpenTour-Control` with the separate private
+writer reference; never X-Api-Key, a password or a browser/URL secret.
+
+## Exact source seam inspected
+
+Implementation targets upstream EspoCRM tag10.0.11, source commit
+`32d559ba86d3be607599d1325c359668c1178850`, matching the documented installed
+version. Relevant official sources:
+
+- [Custom Actions/routes](https://docs.espocrm.com/development/api-action/)
+- [10.0.11 noAuth/system-user dispatch](https://github.com/espocrm/espocrm/blob/32d559ba86d3be607599d1325c359668c1178850/application/Espo/Core/Api/RouteProcessor.php)
+- [ORM transaction manager](https://github.com/espocrm/espocrm/blob/32d559ba86d3be607599d1325c359668c1178850/application/Espo/ORM/TransactionManager.php)
+- [Repository save/hook options](https://github.com/espocrm/espocrm/blob/32d559ba86d3be607599d1325c359668c1178850/application/Espo/Core/Repositories/Database.php)
+
+The existing internal `UniqueId` entity stores namespaced idempotency receipts
+in the **same DB transaction** as title changes or bootstrap creation. No new table, BoardStore schema, task queue or API user is introduced. The
+supported CRM metadata rebuild adds one nullable varchar100 control column on
+Contact; it does not redefine the built-in title or relationship role. Its null
+terminateAt prevents ordinary expiry cleanup; retain these receipts while
+requests can be retried. The short native primary ID is accompanied by the full
+namespace/operation name; collisions refuse rather than overwrite an unrelated
+row. CAS locks the exact Contact row, checks the opaque current control-field/version,
+then stores the custom value, reads it back through ORM in the same transaction,
+and only then records success. Missing/stale non-storable metadata fails before
+bootstrap or API work. Versions and receipt namespaces include the storage field;
+old virtual-title receipts are preserved but cannot acknowledge the new field. Same operation/input returns the
+original receipt; changed content or stale version is409. A receipt-write failure
+rolls back the title. Concurrent same-key inserts rely on the native unique
+primary key plus the CRM transaction rollback, not a Python mock guarantee.
+
+The backend looks up the exact operation before a POST. A transport-loss response
+leaves the browser's payload/key frozen; explicit retry looks up that receipt
+and returns the saved result without another POST. If the lookup itself fails,
+there is no POST. A not-yet-visible receipt can still have an in-flight first
+request: an explicit same-key retry remains protected by native row lock and
+atomic receipt uniqueness. There is no automatic blind second POST. Receipts
+return only this control field/version and claimed app actor, not customer data.
+
+## Non-circular reviewed bootstrap/adoption
+
+All steps below require the later authorized local integration owner; none was
+run against the live CRM during source work.
+
+1. Review this module and backend/UI together, including independent affected
+   Code/PHP boundary review. Test actual Espo routing/ORM behavior first on a
+   task-owned disposable instance of the pinned10.0.11 image. Synthetic PHP stubs
+   do not prove real SQL locks/atomicity, routing, hooks or token rejection.
+2. An authorized OS operator can install only this module directory under the
+   existing `custom/Espo/Modules/OpenTourControl` namespace without replacing
+   other custom files, and clear/rebuild Espo cache through its supported CLI.
+   No admin password/API key or native user/Role change is needed. Directory and
+   private file ownership must match the runtime PHP user (normally www-data),
+   not an accidental root-owned CLI invocation. No public hosting is needed.
+3. Generate a fresh bootstrap nonce and separate capability using a local
+   cryptographic generator, each at least32 URL-safe characters. Write
+   `data/opentour-control-bootstrap.json` as mode0600 with exactly
+   `{nonce,token}`. Do not print/paste/store these live values in Git or chat.
+   Keep the same nonce/token on retries. Installation and OS CLI access to the
+   existing app/DB are the remaining privileged capability; the app writer does
+   not get them.
+4. Run `bin/command open-tour-control-bootstrap` as that authorized runtime OS
+   user. It takes no caller fields/IDs/options. It creates one visibly fictional
+   Contact with fixed synthetic names, empty title and a nonce-derived marker,
+   and atomically saves its receipt. It then publishes private binding/hash and
+   writer-reference files. A response/file failure after DB commit reuses that
+   same bootstrap receipt/Contact on retry. A changed nonce while control files
+   already exist refuses before another Contact is created. Failure publishing
+   either private file is an incomplete bootstrap; rerun the same input, never
+   invent a new ID or repeat with a new nonce. Raw capability is never stdout.
+5. Inspect the returned synthetic Contact ID and the exact marker using bounded
+   local checks. Copy only the mode0600 writer reference from
+   `data/opentour-control-writer.json` into the app's existing private runtime
+   area. The upstream binding `data/opentour-control.json` contains only the
+   pinned ID, marker and token hash. It is not a generic endpoint config.
+6. Enable backend `--crm-control-credential-file <private-writer-reference>` (the
+   reviewed render-agents helper accepts/validates that same explicit private
+   reference, passes it only to the server, and never reads its contents) and
+   a separate exact app bearer grant extension `crmControlTitle` for that same
+   typed Contact. Keep the old GET-only credential unchanged and separately
+   supplied for CRM card reads. Only the reviewed local adoption owner changes
+   runtime/grants; this source task does not do so. Pinning happens **after**
+   the authorized CLI creates the synthetic record, so there is no record-ID/
+   writer-creation circular dependency and no persistent app administrator key.
+7. Independent integration verifies native denial with this capability alone,
+   edit/readback/reload of title, forbidden records/entities/fields/roles, CAS,
+   same-key concurrency and committed-response-loss reconciliation. Confirm no
+   unrelated business field/record/Stream/account changed. Keep accepted PR23's
+   conversation/proposal control binding; do not relabel these
+   tests as its actual-agent outcome. No send, booking or payment follows.
+
+To revoke, the authorized operator disables/removes the upstream control binding
+and app grant/reference, preserving records/receipts for unknown-operation
+reconciliation. Missing binding fails closed. Disabling the module/cache route
+also removes its surface. Do not delete the control Contact or receipts while an
+operation is unknown. Any later cleanup is a separately verified exact-ID/marker
+operation on the created synthetic Contact only; no generic delete capability
+is supplied to the app. Replacing the capability requires an explicit lifecycle
+operation, not rerunning bootstrap with another nonce.
+
+## Validation commands
+
+```sh
+python3 -m unittest discover -s tests -p 'test_crm_control.py' -v
+python3 tools/crm_control_probe.py
+```
+
+CI also runs PHP syntax and the actual extension classes with synthetic Espo
+interface/ORM stubs in the digest-pinned Espo image, read-only/no-network/without
+CRM/config/credentials. The browser uses only a disposable profile and a
+synthetic denied-by-default upstream. These are affected source checks, not
+live Espo ACL/ORM integration or deployment acceptance.
+
+## Storage migration and real regression (repair of non-storable title)
+
+The module's Contact entityDefs declares only `cOpenTourControlTitle`: varchar,
+maxLength100, notStorable=false, readOnly=true, import/export disabled. These
+metadata UI/service hints are not a replacement for the capability boundary.
+Do not override native Contact.title/select/notStorable or AccountContact.role.
+Install the exact module metadata with the PHP files, then use supported
+`bin/command rebuild` in the authorized isolated instance; no hand-created SQL
+column or owner schema workaround. Back up metadata/DB before later reviewed
+live adoption. Keep new control data/receipts on rollback: disable capability and
+routes; do not remove the field/column or run a destructive rebuild while data
+or an effect is unknown. Existing unrelated business fields remain unchanged.
+
+The existing QA-owned stock10.0.11 instance is reused. QA explicitly permits one
+synthetic Account and a nonempty relation to the already marked control Contact,
+created only through native ORM. The repository test
+`tools/php/crm_control_storage_regression.php` requires the exact disposable
+project acknowledgement before loading the application. After candidate module
+copy + native rebuild/bootstrap, copy this test outside the production module
+and execute it as the runtime PHP user with:
+
+```sh
+OPENTOUR_DISPOSABLE_CRM_TEST=opentour-pr24-qa-20261114-8fd750 php /tmp/crm_control_storage_regression.php
+```
+
+This is **only** a task-owned disposable fixture invocation, never an owner-service
+command. The test checks declared storage/native-title metadata, replays the
+bootstrap without another Contact, preserves/ignores the earlier invalid receipt,
+sets up a visibly synthetic Account/role via ORM, performs the confined write,
+and reads it through a fresh application/EntityManager. It compares all fetched
+business attributes and relationship role before/after (excluding only the new
+field and standard modified audit fields), then replays the exact saved request
+without another receipt or Contact change. A private stable request file prevents
+blind fresh-key writes after a test interruption. No manual SQL/DDL is used and
+output contains named assertions/counts, no field values or capability. QA owns
+the run and exact-head report; a PHP lint or stub PASS alone is not its result.
+
+## Ordinary CRM projection boundary
+
+The module adds a mandatory field-level read/edit deny for only
+`Contact.cOpenTourControlTitle`, for ordinary users and administrators alike.
+Espo's supported ACL removes forbidden attributes and rejects search predicates
+on them. A Contact Record output filter additionally clears that one attribute
+from generic serialization, including explicit selection, and appends to existing
+native filters. No unrelated scope permissions are granted or replaced. This is
+an additive restriction; install metadata and PHP together and run supported
+rebuild so cached ACL/record definitions reflect the exact candidate.
+
+The capability action uses raw ORM after its own pinned-record/token checks;
+it does not use generic RecordService output. Its read/write remains available.
+Native Contact.title and Account relationship roles are untouched. ReadOnly and
+import/export hints alone did not protect ordinary reads in the earlier candidate.
+The preserved QA instance must verify default list/detail/explicit-select output
+and a forbidden-field search with its existing ordinary reader, plus the scoped
+positive read. Completed storage/CAS regressions need not be replayed for this
+projection-only repair. Source stubs cannot establish effective native ACL.
+
+QA's masked read probe is captured as a regression with an explicit expected
+before/after mode; no credential contents or values are printed. Only the
+existing task-owned fixture directory and loopback port are allowed:
+
+```sh
+python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/opentour-pr24-qa-8fd750743b215cd4 --expect exposed
+# QA copies the reviewed module and runs supported rebuild, then:
+python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/opentour-pr24-qa-8fd750743b215cd4 --expect hidden
+```
+
+The filter uses supported PHP nested-array `where[0][...]` query keys; a scalar
+JSON `where=` is ignored by Espo and cannot test denial. The before mode must
+detect all three matching-value leaks. The after mode
+requires normal list/detail still available, no value in any generic projection,
+forbidden-field filter denied (400 or403 with no records/value), a positive
+firstName filter returning the exact synthetic Contact, and a nonempty scoped
+read still available. The
+QA owner alone runs this on its preserved synthetic instance; this source task
+does not invoke the probe or read its private references.

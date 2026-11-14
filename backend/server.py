@@ -12,6 +12,7 @@ from .adapters import EspoCRM, Failure, NativeWork, NativeObligation
 from .core import Auth, MISSION, PROJECT, Service, WRITE_LIMITATION, version
 from .campaign_preview import FixtureCampaign, CAMPAIGN_ID
 from .board_store import BoardStore
+from .crm_control import CRMTitleControl, title_scope
 from .web_config import deployment_url, ui_policy
 from .client_conversations import ClientControls
 
@@ -35,10 +36,11 @@ UI_FILES = {'/': ('index.html', 'text/html; charset=utf-8'),
             '/ui/assets/Commissioner.ttf': ('assets/Commissioner.ttf', 'font/ttf')}
 
 
-def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None, allowed_ui_origins=(), client_controls=None):
+def make_server(service, auth, port=18083, data_mode='live', campaign=None, board_store=None, public_base_url=None, obligations=None, allowed_ui_origins=(), crm_title_control=None, client_controls=None):
     if data_mode not in ('live', 'synthetic'):
         raise ValueError('invalid data mode')
     ui_origins = frozenset(deployment_url(origin, origin_only=True) for origin in allowed_ui_origins)
+    crm_title_control=crm_title_control or CRMTitleControl()
     client_controls = client_controls or ClientControls()
     campaign = campaign or FixtureCampaign()
     obligations = obligations or NativeObligation()
@@ -175,6 +177,18 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                         return self.respond(200, data)
                     else:
                         raise Failure('board_route_forbidden', 403)
+                elif path.startswith('/api/clients/') and path.endswith('/title-control') and not params:
+                    client_id=path[len('/api/clients/'):-len('/title-control')]
+                    scope=title_scope(auth,principal,self.headers.get('Authorization'))
+                    if self.command=='GET':return self.respond(200,crm_title_control.read(principal,scope,client_id))
+                    if self.command!='POST':raise Failure('crm_control_method_forbidden',403)
+                    if (self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1
+                            or not self.headers.get('Content-Length','').isdigit() or not 0<int(self.headers['Content-Length'])<=2048):
+                        raise Failure('crm_control_body_invalid',400)
+                    if self.headers.get('Content-Type')!='application/json':raise Failure('json_required',415)
+                    raw=self.rfile.read(int(self.headers['Content-Length']))
+                    if len(raw)!=int(self.headers['Content-Length']):raise Failure('incomplete_body',400)
+                    return self.respond(200,crm_title_control.edit(principal,scope,client_id,json.loads(raw)))
                 elif self.command=='POST' and path.startswith('/api/clients/') and path.endswith('/conversation') and not params:
                     if not board_store:raise Failure('board_store_not_configured',503)
                     client_id=path[len('/api/clients/'):-len('/conversation')]
@@ -199,6 +213,8 @@ def make_server(service, auth, port=18083, data_mode='live', campaign=None, boar
                     data = service.clients(params)
                 elif path.startswith('/api/clients/') and not params:
                     data = service.client(path[len('/api/clients/'):])
+                    data['titleControl']={'enabled':crm_title_control.enabled(principal,title_scope(auth,principal,self.headers.get('Authorization')),data['id'])}
+                    data['version']=version({k:v for k,v in data.items() if k!='version'})
                     if board_store:
                         ref = {'entity': data['provenance']['entity'], 'externalId': data['provenance']['externalId']}
                         data['relatedWork'] = board_store.related(principal, ref) if principal.board_read else {
@@ -259,12 +275,13 @@ def main():
                         help='Private OpenTour application DB outside checkout/.artifacts')
     parser.add_argument('--public-base-url',help='Explicit HTTPS origin/prefix behind a trusted proxy; backend stays loopback')
     parser.add_argument('--allowed-ui-origin', action='append', default=[], help='Exact trusted static UI origin, no path; repeat explicitly. HTTPS or loopback HTTP only; no credential cookies')
+    parser.add_argument('--crm-control-credential-file',type=Path,help='Separate scoped OpenTourControlTitle capability; never an Espo API-user/admin credential')
     parser.add_argument('--client-controls-file', type=Path, help='Private server-owned exact clientRef to existing continuationRef bindings; never browser-selected')
     parser.add_argument('--work-root', type=Path, help='Existing registered OpenTour work root for native read projection')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     service = Service(EspoCRM(credential_file=args.crm_credential_file), NativeWork(args.work_root or root / 'opentour-rig', MISSION))
-    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url,allowed_ui_origins=args.allowed_ui_origin,client_controls=ClientControls(args.client_controls_file)) as server:
+    with make_server(service, Auth(args.auth_file), args.port, board_store=BoardStore(args.board_db),public_base_url=args.public_base_url,allowed_ui_origins=args.allowed_ui_origin,crm_title_control=CRMTitleControl(args.crm_control_credential_file),client_controls=ClientControls(args.client_controls_file)) as server:
         print('OpenTour local read backend listening on 127.0.0.1:' + str(server.server_port), flush=True)
         server.serve_forever()
 

@@ -174,6 +174,17 @@ class LocalBoardReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError,'private_reference_mismatch'):
                 validate_launch_agents(paths,release,db,auth,crm,controls)
 
+    def test_render_separate_control_capability_only_with_explicit_reference(self):
+        with tempfile.TemporaryDirectory(prefix='opentour-write-reference-') as raw:
+            root=Path(raw);release=root/'abcdef1';release.mkdir()
+            capability=root/'control-capability.json';capability.write_text('synthetic-reference-never-read');capability.chmod(0o600)
+            auth=root/'auth.json';db=root/'data'/'board.sqlite3'
+            paths=render_launch_agents(release,root/'app',Path(sys.executable),auth,db,root/'plists',crm_control_credential_file=capability)
+            self.assertTrue(validate_launch_agents(paths,release,db,auth,crm_control_credential_file=capability)['valid'])
+            with self.assertRaises(ReleaseError):validate_launch_agents(paths,release,db,auth)
+            worker=next(p for p in paths if '.worker.' in p.name)
+            self.assertNotIn('--crm-control-credential-file',plistlib.loads(worker.read_bytes())['ProgramArguments'])
+
     def test_stage_extracts_exact_commit_without_checkout_metadata(self):
         with tempfile.TemporaryDirectory(prefix="opentour-stage-source-") as raw:
             root = Path(raw)

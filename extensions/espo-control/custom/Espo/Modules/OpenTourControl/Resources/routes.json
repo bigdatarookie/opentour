@@ -1,0 +1,5 @@
+[
+ {"route":"/OpenTourControlTitle","method":"get","noAuth":true,"actionClassName":"Espo\\Modules\\OpenTourControl\\Api\\Title"},
+ {"route":"/OpenTourControlTitle/status/:operationId","method":"get","noAuth":true,"actionClassName":"Espo\\Modules\\OpenTourControl\\Api\\Title"},
+ {"route":"/OpenTourControlTitle","method":"post","noAuth":true,"actionClassName":"Espo\\Modules\\OpenTourControl\\Api\\Title"}
+]
