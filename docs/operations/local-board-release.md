@@ -132,3 +132,13 @@ preserve schema5 and reconcile/forward-fix; never restore over it or run schema4
 code. The old schema3→4 restore remains its separately bounded historical path.
 These helpers do not install/load agents or change grants; no author activation
 is performed by this PR.
+
+The reviewed renderer now accepts optional `--crm-credential-file` and
+`--client-controls-file` references on `render-agents`. Supply only the
+independently verified GET-only CRM reference and reviewed exact controls. It
+checks private file ownership/mode/path without reading contents, passes the
+references only to the server and validates exact readback. Omitting them keeps
+the existing profile; readback without the matching explicit references rejects
+a plist that adds them. No credential file, identity or grant is created or
+modified by rendering. This makes the local adoption plan executable without
+bypassing the old renderer's default no-CRM-reference profile.

@@ -155,6 +155,25 @@ class LocalBoardReleaseTests(unittest.TestCase):
                 self.assertTrue(data["KeepAlive"])
                 self.assertEqual(data["WorkingDirectory"], str(release))
 
+    def test_render_private_read_and_control_references_only_when_explicit(self):
+        with tempfile.TemporaryDirectory(prefix='opentour-reference-plist-') as raw:
+            root=Path(raw);release=root/'abcdef1';release.mkdir()
+            crm=root/'crm.json';controls=root/'controls.json'
+            for path in (crm,controls):path.write_text('synthetic-invalid-json-never-read');path.chmod(0o600)
+            auth=root/'auth.json';db=root/'data'/'board.sqlite3'
+            paths=render_launch_agents(release,root/'app',Path(sys.executable),auth,db,root/'plists',crm,controls)
+            self.assertTrue(validate_launch_agents(paths,release,db,auth,crm,controls)['valid'])
+            with self.assertRaisesRegex(ReleaseError,'must_not_add_crm_credentials'):
+                validate_launch_agents(paths,release,db,auth)
+            server=next(p for p in paths if '.server.' in p.name)
+            worker=next(p for p in paths if '.worker.' in p.name)
+            worker_args=plistlib.loads(worker.read_bytes())['ProgramArguments']
+            self.assertNotIn('--crm-credential-file',worker_args);self.assertNotIn('--client-controls-file',worker_args)
+            data=plistlib.loads(server.read_bytes());data['ProgramArguments'][data['ProgramArguments'].index('--client-controls-file')+1]=str(root/'wrong.json')
+            server.write_bytes(plistlib.dumps(data))
+            with self.assertRaisesRegex(ReleaseError,'private_reference_mismatch'):
+                validate_launch_agents(paths,release,db,auth,crm,controls)
+
     def test_stage_extracts_exact_commit_without_checkout_metadata(self):
         with tempfile.TemporaryDirectory(prefix="opentour-stage-source-") as raw:
             root = Path(raw)
