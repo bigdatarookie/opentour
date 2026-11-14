@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from .adapters import Failure
 from .core import ID, PROJECT, now, version
+from .client_conversations import ClientConversations, CONVERSATION_SCHEMA
 
 DESTINATIONS = {'tasks': 'operator-agent@kernel', 'clients': 'campaign-creative@opentour-rig',
                 'campaigns': 'campaign-operator@opentour-rig'}
@@ -44,7 +45,7 @@ def client_reference(value):
     return {'entity': value['entity'], 'externalId': value['externalId']}
 
 
-class BoardStore:
+class BoardStore(ClientConversations):
     def __init__(self, path):
         requested = Path(path).expanduser().absolute()
         # Pin the resolved parent for validation, creation and every later connection.
@@ -81,7 +82,7 @@ class BoardStore:
         self.path = path
         with self.db() as db:
             schema = db.execute('PRAGMA user_version').fetchone()[0]
-            if schema not in (0, 1, 2, 3, 4):
+            if schema not in (0, 1, 2, 3, 4, 5):
                 raise Failure('board_schema_unsupported', 503)
             if schema == 0:
                 for sql in SCHEMA:
@@ -98,6 +99,9 @@ class BoardStore:
                 db.execute('ALTER TABLE task_execution ADD COLUMN destination TEXT')
                 db.execute('ALTER TABLE outbox ADD COLUMN routing_ref TEXT')
                 db.execute('PRAGMA user_version=4')
+            if schema < 5:
+                for sql in CONVERSATION_SCHEMA:db.execute(sql)
+                db.execute('PRAGMA user_version=5')
 
     @contextmanager
     def db(self):
@@ -115,18 +119,18 @@ class BoardStore:
         finally:
             db.close()
 
-    def permit(self, principal, task_id=None, write=False, create=False):
+    def permit(self, principal, task_id=None, write=False, create=False, _db=None):
         if PROJECT not in principal.projects or not principal.board_read:
             raise Failure('board_access_forbidden', 403)
         if write and not principal.board_respond:
             raise Failure('board_response_forbidden', 403)
         if create and (principal.role != 'administrator' or not principal.board_create or '*' not in principal.board_tasks):
             raise Failure('board_create_forbidden', 403)
-        if task_id is not None and '*' not in principal.board_tasks and task_id not in principal.board_tasks:
+        if task_id is not None and '*' not in principal.board_tasks and task_id not in principal.board_tasks and not self.context_allowed(principal,task_id,_db):
             raise Failure('board_task_not_found', 404)
 
     def task(self, db, principal, task_id, **permissions):
-        self.permit(principal, task_id, **permissions)
+        self.permit(principal, task_id, _db=db, **permissions)
         row = db.execute('SELECT * FROM tasks WHERE id=? AND project=?', (task_id, PROJECT)).fetchone()
         if row is None:
             raise Failure('board_task_not_found', 404)
@@ -203,6 +207,10 @@ class BoardStore:
         reference = self.client_ref(db, task_id)
         if reference is not None:
             context['clientRef'] = reference
+        if db.execute('SELECT 1 FROM client_conversations WHERE task_id=?',(task_id,)).fetchone():
+            context['conversationMode']='client'
+            context['proposal']=self.proposal(db,task_id)
+            context['history']=[dict(r) for r in reversed(db.execute('SELECT id,kind,body,author,author_role,reply_to FROM messages WHERE task_id=? ORDER BY seq DESC LIMIT 12',(task_id,)).fetchall())]
         # The body is deterministic and persisted before delivery; no mutable task reread on retry.
         raw = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         outbox_id = 'context_' + hashlib.sha256((PROJECT + ':' + message_id).encode()).hexdigest()
@@ -261,6 +269,10 @@ class BoardStore:
         return row['native_ref'] if row else None
 
     def request_state(self, db, task_id):
+        if db.execute('SELECT 1 FROM client_conversations WHERE task_id=?',(task_id,)).fetchone():
+            latest=db.execute(MESSAGE_SELECT+' WHERE m.task_id=? ORDER BY m.seq DESC LIMIT 1',(task_id,)).fetchone()
+            if latest and latest['kind']=='agent_reply':return 'agent_replied'
+            return ('saved' if latest['state']=='pending' else latest['state']) if latest else 'comment_only'
         request = db.execute("SELECT id FROM messages WHERE task_id=? AND kind='request' ORDER BY seq DESC LIMIT 1", (task_id,)).fetchone()
         if not request:
             return 'comment_only'
@@ -273,9 +285,9 @@ class BoardStore:
 
     def project_message(self, row):
         return {k: row[k] for k in ('id', 'kind', 'body', 'reply_to', 'author', 'author_role', 'created_at')} | {
-            'version': self.message_version(row), 'persistence': 'saved', 'delivery': {'id': row['outbox_id'], 'state': row['state'],
+            'version': self.message_version(row), 'persistence': 'saved', 'delivery': {'id': row['outbox_id'], 'state': row['state'] or 'not_applicable',
                 'executionRef': row['native_id'] if row['state'] == 'delivered' else None,
-                'processing': row['processing'], 'error': row['error'],
+                'processing': row['processing'] or 'returned', 'error': row['error'],
                 'reason': row['processing_reason'], 'result': row['result_text'], 'evidenceRef': row['evidence_ref'],
                 'timestamps': {k: row[k] for k in ('delivered_at','received_at','accepted_at','continued_at')}}}
 
@@ -294,6 +306,12 @@ class BoardStore:
             task['clientRef'] = self.client_ref(db, task_id)
             task['continuationRef'] = self.execution_ref(db, task_id)
             task['requestState'] = self.request_state(db, task_id)
+            contextual=bool(db.execute('SELECT 1 FROM client_conversations WHERE task_id=?',(task_id,)).fetchone())
+            task['conversation']={'enabled':contextual,'recipient':db.execute('SELECT destination FROM task_execution WHERE task_id=?',(task_id,)).fetchone()[0] if contextual else None,
+                'canMessage':contextual and principal.board_respond,
+                'canEditProposal':contextual and principal.board_respond and principal.proposal_edit and self.client_key(task['clientRef']) in principal.conversation_clients}
+            task['proposal']=self.proposal(db,task_id) if contextual else None
+            task['proposalHistory']=[dict(r) for r in db.execute('SELECT revision,base_revision,author,author_role,source_message,created_at FROM proposal_revisions WHERE task_id=? ORDER BY revision DESC LIMIT 50',(task_id,))] if contextual else []
             task['messages'] = [self.project_message(r) for r in reversed(rows[:100])]
             task['historyComplete'] = len(rows) <= 100
             task['version'] = version(task)
@@ -313,8 +331,8 @@ class BoardStore:
             sql = """SELECT t.id,t.title FROM tasks t JOIN task_clients c ON c.task_id=t.id
                      WHERE t.project=? AND c.entity=? AND c.external_id=?"""
             if '*' not in principal.board_tasks:
-                sql += ' AND t.id IN (' + ','.join('?' for _ in principal.board_tasks) + ')'
-                params.extend(principal.board_tasks)
+                sql += ' AND (t.id IN (' + ','.join('?' for _ in principal.board_tasks) + ') OR (EXISTS(SELECT 1 FROM client_conversations x WHERE x.task_id=t.id) AND ? IN (' + ','.join('?' for _ in principal.conversation_clients) + ')))'
+                params.extend(principal.board_tasks);params.append(self.client_key(reference));params.extend(principal.conversation_clients)
             rows = db.execute(sql + ' ORDER BY t.created_at DESC,t.id LIMIT 101', params).fetchall()
             return {'items': [dict(r) for r in rows[:100]], 'status': 'available', 'complete': len(rows) <= 100}
 
@@ -324,14 +342,14 @@ class BoardStore:
             params = [PROJECT]
             sql = 'SELECT * FROM tasks WHERE project=?'
             if '*' not in principal.board_tasks:
-                sql += ' AND id IN (' + ','.join('?' for _ in principal.board_tasks) + ')'
-                params.extend(principal.board_tasks)
+                sql += " AND (id IN (" + ','.join('?' for _ in principal.board_tasks) + ") OR id IN (SELECT x.task_id FROM client_conversations x JOIN task_clients c ON c.task_id=x.task_id WHERE 'crm:'||c.entity||':'||c.external_id IN (" + ','.join('?' for _ in principal.conversation_clients) + ')))'
+                params.extend(principal.board_tasks);params.extend(principal.conversation_clients)
             rows = db.execute(sql + ' ORDER BY created_at DESC,id LIMIT 101', params).fetchall()
             return {'project': PROJECT, 'items': [{**dict(r), 'requestState': self.request_state(db,r['id'])} for r in rows[:100]], 'complete': len(rows) <= 100}
 
 
 MESSAGE_SELECT = '''SELECT m.*,o.id AS outbox_id,o.state,o.native_id,o.processing,o.error,o.processing_reason,o.result_text,o.evidence_ref,o.delivered_at,o.received_at,o.accepted_at,o.continued_at
-FROM messages m JOIN outbox o ON o.message_id=m.id'''
+FROM messages m LEFT JOIN outbox o ON o.message_id=m.id'''
 SCHEMA = [
 '''CREATE TABLE tasks(id TEXT PRIMARY KEY,project TEXT NOT NULL,title TEXT NOT NULL,description TEXT NOT NULL,
 section TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL)''',

@@ -120,10 +120,10 @@ def _json_value(value):
     return {"type": type(value).__name__, "value": value}
 
 
-def _logical_digest(db: sqlite3.Connection, schema: dict[str, list[str]]) -> str:
+def _logical_digest(db: sqlite3.Connection, schema: dict[str, list[str]], allowed_extra_tables=()) -> str:
     """Fingerprint table rows privately; return only a digest, never row values."""
     current = _tables(db)
-    if set(current) != set(schema):
+    if set(current) - set(allowed_extra_tables) != set(schema):
         raise ReleaseError("database_table_set_changed_since_backup")
     digest = hashlib.sha256()
     for table in sorted(schema):
@@ -305,30 +305,30 @@ def _read_manifest(backup: Path) -> tuple[Path, dict]:
     return backup, manifest
 
 
-def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
-    """Restore a schema-3 pre-PR20 snapshot only before app/outbox data changes."""
+def _restore_backup(database: Path, backup: Path, services_stopped: bool, old_schema, new_schema, guard, extra_tables=()) -> dict:
+    """Restore a verified pre-migration snapshot only before any application effect."""
     if not services_stopped:
         raise ReleaseError("services_must_be_stopped_before_restore")
     database = _private_file(database.expanduser().absolute())
     backup, manifest = _read_manifest(backup)
-    if manifest.get("user_version") != LEGACY_SCHEMA:
-        raise ReleaseError("rollback_backup_must_be_schema3")
+    if manifest.get("user_version") != old_schema:
+        raise ReleaseError("rollback_backup_must_be_schema3" if old_schema==3 else "rollback_backup_must_be_schema4")
     for suffix in ("-wal", "-shm"):
         if Path(str(database) + suffix).exists():
             raise ReleaseError("database_sidecar_present")
     src = _connect_readonly(backup)
     current = _connect_readonly(database)
     try:
-        if _schema_version(src) != LEGACY_SCHEMA or _schema_version(current) != UPGRADED_SCHEMA:
+        if _schema_version(src) != old_schema or _schema_version(current) != new_schema:
             raise ReleaseError("rollback_schema_versions_mismatch")
         _integrity(src)
         _integrity(current)
         columns = manifest["table_columns"]
-        _assert_only_empty_pr20_columns(current, columns)
+        guard(current, columns)
         if _logical_digest(src, columns) != manifest.get("logical_sha256"):
             raise ReleaseError("backup_logical_fingerprint_mismatch")
-        # The only allowed post-backup difference is PR20's two nullable columns.
-        if _logical_digest(current, columns) != manifest.get("logical_sha256"):
+        # The guard verifies the exact migration-only additions, all still empty.
+        if _logical_digest(current, columns, extra_tables) != manifest.get("logical_sha256"):
             raise ReleaseError("rollback_refused_database_changed_since_backup")
         fd, temp_name = tempfile.mkstemp(prefix=f".{database.name}.restore-", suffix=".sqlite3", dir=database.parent)
         os.close(fd)
@@ -339,7 +339,7 @@ def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool)
                 src.backup(dst)
                 dst.commit()
                 _integrity(dst)
-                if _schema_version(dst) != LEGACY_SCHEMA or _logical_digest(dst, columns) != manifest["logical_sha256"]:
+                if _schema_version(dst) != old_schema or _logical_digest(dst, columns) != manifest["logical_sha256"]:
                     raise ReleaseError("rollback_staging_verification_failed")
             finally:
                 dst.close()
@@ -350,10 +350,31 @@ def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool)
         except BaseException:
             temp.unlink(missing_ok=True)
             raise
-        return {"restored_schema": LEGACY_SCHEMA, "integrity": "ok", "table_counts": manifest["table_counts"]}
+        return {"restored_schema": old_schema, "integrity": "ok", "table_counts": manifest["table_counts"]}
     finally:
         current.close()
         src.close()
+
+
+def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
+    return _restore_backup(database,backup,services_stopped,3,4,_assert_only_empty_pr20_columns)
+
+
+def _assert_only_empty_v016_tables(db, schema4):
+    current=_tables(db)
+    extra={'client_conversations':['task_id'],
+           'proposal_revisions':['task_id','revision','base_revision','title','body','author','author_role','source_message','created_at']}
+    if current != {**schema4,**extra}:
+        raise ReleaseError('database_schema_changed_beyond_v016')
+    for table in extra:
+        if db.execute('SELECT 1 FROM '+table+' LIMIT 1').fetchone():
+            raise ReleaseError('rollback_refused_new_schema_data')
+
+
+def restore_schema4_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
+    """Pre-traffic schema5->4 only; any saved message/receipt/edit/heartbeat refuses."""
+    return _restore_backup(database,backup,services_stopped,4,5,_assert_only_empty_v016_tables,
+                           ('client_conversations','proposal_revisions'))
 
 
 def assert_local_services_stopped() -> None:
@@ -567,6 +588,10 @@ def main(argv=None) -> int:
     restore.add_argument("--backup", type=Path, required=True)
     restore.add_argument("--assert-services-stopped", action="store_true", required=True,
                          help="operator confirms both LaunchAgents are unloaded and processes exited")
+    restore4 = sub.add_parser("restore-v4", help="restore unchanged schema-4 snapshot before any v016 traffic")
+    restore4.add_argument("--database", type=Path, required=True)
+    restore4.add_argument("--backup", type=Path, required=True)
+    restore4.add_argument("--assert-services-stopped", action="store_true", required=True)
     agents = sub.add_parser("render-agents", help="write and validate candidate plists without loading them")
     agents.add_argument("--release-dir", type=Path, required=True)
     agents.add_argument("--app-root", type=Path, required=True)
@@ -585,9 +610,10 @@ def main(argv=None) -> int:
             path, manifest, info = backup_database(args.database, args.backup_dir)
             result = {"backup": str(path), "manifest": str(manifest), "user_version": info["user_version"],
                       "integrity": "ok", "table_counts": info["table_counts"]}
-        elif args.command == "restore":
+        elif args.command in ("restore","restore-v4"):
             assert_local_services_stopped()
-            result = restore_schema3_backup(args.database, args.backup, args.assert_services_stopped)
+            restore_fn=restore_schema4_backup if args.command=="restore-v4" else restore_schema3_backup
+            result = restore_fn(args.database, args.backup, args.assert_services_stopped)
         elif args.command == "render-agents":
             paths = render_launch_agents(args.release_dir, args.app_root, args.python,
                                          args.auth_file, args.database, args.output_dir)
