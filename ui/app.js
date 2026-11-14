@@ -434,6 +434,7 @@ function renderDetail(kind,item) {
   } else {
     main.append(detailSection('Контакты',[item.email ? `Email: ${item.email}` : 'Email не указан',item.phone ? `Телефон: ${item.phone}` : 'Телефон не указан'].join('\n')));
     if (item.surname?.technicalValue) main.append(node('p','technical-note','Фамилия не подтверждена. Техническое значение CRM не является сведением о клиенте.'));
+    if (item.kind === 'person' && item.attributes?.firstName) main.append(detailSection('Имя в CRM',item.attributes.firstName));
     if (item.attributes?.crmType) main.append(detailSection('Категория CRM',item.attributes.crmType));
     const related=node('section','detail-section related-tasks');related.append(node('h3','','Связанные работы'));
     if (item.relatedWork?.status === 'available') {
@@ -445,6 +446,7 @@ function renderDetail(kind,item) {
     } else related.append(node('p','','Связанные работы недоступны для этого доступа или подключения.'));
     main.append(related);
     if(item.titleControl?.enabled)main.append(crmTitleForm(item));
+    if(item.firstNameEdit?.enabled)main.append(crmTitleForm(item, true));
     if(item.clientConversation?.enabled) main.append(clientConversationForm(item));
     side.append(metadata([['Тип',item.kind === 'organization' ? 'Организация' : 'Физическое лицо'],['Источник','CRM'],['Изменено',item.modifiedAt || 'Не указано']]));
     try {
@@ -717,26 +719,27 @@ window.addEventListener('resize',()=>{
 });
 
 
-function crmTitleForm(item) {
-  const root=node('section','detail-section'),key='crm-title:'+item.id;
-  root.append(node('h3','','Изменить контрольную метку CRM'));
-  const label=node('label','','Контрольная метка (до 100 символов)'),input=node('input'),save=node('button','primary-button','Сохранить метку'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
-  input.id='crm-control-title';input.maxLength=100;label.htmlFor=input.id;save.type='submit';status.setAttribute('role','status');
+function crmTitleForm(item, nativeName=false) {
+  const field=nativeName ? 'firstName' : 'title', suffix=nativeName ? '/first-name' : '/title-control';
+  const root=node('section','detail-section'),key='crm-'+field+':'+item.id;
+  root.append(node('h3','',nativeName ? 'Изменить имя в CRM' : 'Изменить контрольную метку CRM'));
+  const label=node('label','',nativeName ? 'Имя (до 100 символов)' : 'Контрольная метка (до 100 символов)'),input=node('input'),save=node('button','primary-button',nativeName ? 'Сохранить имя' : 'Сохранить метку'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
+  input.id=nativeName ? 'crm-first-name' : 'crm-control-title';input.required=nativeName;input.maxLength=100;label.htmlFor=input.id;save.type='submit';status.setAttribute('role','status');
   let draft=state.drafts.get(key);if(!draft){draft={title:'',version:null,frozen:null,saving:false};state.drafts.set(key,draft);}
   input.value=draft.title;input.readOnly=true;save.disabled=true;reload.hidden=true;
   input.addEventListener('input',()=>{draft.title=input.value;});
-  const form=node('form','crm-title-form');form.append(label,input,save,status,reload);root.append(form);
+  const form=node('form',nativeName ? 'crm-first-name-form' : 'crm-title-form');form.append(label,input,save,status,reload);root.append(form);
   const session=state.session;
-  api('/api/clients/'+encodeURIComponent(item.id)+'/title-control').then(({data})=>{
+  api('/api/clients/'+encodeURIComponent(item.id)+suffix).then(({data})=>{
     if(session!==state.session || !root.isConnected)return;
-    if(!draft.frozen && !draft.version){draft.version=data.version;draft.title=data.title;input.value=draft.title;}
-    input.readOnly=!!draft.frozen;save.disabled=draft.saving;status.textContent='Только отдельная контрольная метка этой записи.';
+    if(!draft.frozen && !draft.version){draft.version=data.version;draft.title=data[field];input.value=draft.title;}
+    input.readOnly=!!draft.frozen;save.disabled=draft.saving;status.textContent=nativeName ? 'Только имя этой CRM-записи.' : 'Только отдельная контрольная метка этой записи.';
   }).catch(()=>{if(root.isConnected)status.textContent='Контрольный writer недоступен. Данные не изменены.';});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(save.disabled || draft.saving)return;draft.saving=true;save.disabled=true;input.readOnly=true;
-    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),title:draft.title,baseVersion:draft.version};
+    if(!draft.frozen)draft.frozen={requestId:crypto.randomUUID(),[field]:draft.title,baseVersion:draft.version};
     try {
-      await api('/api/clients/'+encodeURIComponent(item.id)+'/title-control',{body:draft.frozen});
+      await api('/api/clients/'+encodeURIComponent(item.id)+suffix,{body:draft.frozen});
       if(session!==state.session)return;state.drafts.delete(key);if(state.modal?.id===item.id)await loadDetail();
     } catch(error) {
       if(session!==state.session || !root.isConnected)return;

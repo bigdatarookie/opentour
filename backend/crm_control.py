@@ -11,13 +11,13 @@ from .core import PROJECT
 CONTROL_FIELD='cOpenTourControlTitle'
 
 
-def title_scope(auth, principal, authorization):
+def title_scope(auth, principal, authorization, grant_key="crmControlTitle"):
     # Extend the existing server-owned bearer grant; no new browser identity mechanism.
     rows=auth.grants if auth.grants is not None else private_json(auth.path).get('principals',[])
     digest=hashlib.sha256(authorization[7:].encode()).hexdigest()
     for row in rows:
         if isinstance(row,dict) and isinstance(row.get('tokenSha256'),str) and hmac.compare_digest(row['tokenSha256'],digest):
-            scope=row.get('crmControlTitle',[])
+            scope=row.get(grant_key,[])
             if (not isinstance(scope,list) or len(scope)>100 or any(not isinstance(v,str) or not re.fullmatch(r'crm:Contact:[A-Za-z0-9]{17,24}',v) for v in scope)):
                 raise Failure('crm_control_grant_invalid',403)
             if (principal.role!='administrator' or row.get('role')!=principal.role or row.get('subject')!=principal.subject
@@ -28,6 +28,10 @@ def title_scope(auth, principal, authorization):
 
 
 class CRMTitleControl:
+    field = CONTROL_FIELD
+    value_key = "title"
+    route = "/OpenTourControlTitle"
+
     def __init__(self, reference_file=None, base='http://127.0.0.1:18082'):
         self.reference_file=reference_file;self.base=base
 
@@ -66,37 +70,54 @@ class CRMTitleControl:
             raise Failure('crm_control_effect_unknown' if method=='POST' else 'crm_control_read_unavailable',503) from None
 
     def _snapshot(self, config, data, operation=None, title=None):
-        if (not isinstance(data,dict) or data.get('entity')!='Contact' or data.get('id')!=config['contactId'] or data.get('field')!=CONTROL_FIELD
-                or not isinstance(data.get('title'),str) or len(data['title'])>100
+        if (not isinstance(data,dict) or data.get('entity')!='Contact' or data.get('id')!=config['contactId'] or data.get('field')!=self.field
+                or not isinstance(data.get(self.value_key),str) or len(data[self.value_key])>100
                 or not isinstance(data.get('version'),str) or not re.fullmatch(r'[a-f0-9]{64}',data['version'])
-                or (operation is not None and (data.get('operationId')!=operation or data.get('saved') is not True or data['title']!=title))):
+                or (operation is not None and (data.get('operationId')!=operation or data.get('saved') is not True or data[self.value_key]!=title))):
             raise Failure('crm_control_response_invalid',503)
         return data
 
     def read(self, principal, scope, client_id):
         config,client=self._authorized(principal,scope,client_id)
-        return self._snapshot(config,self._request(client,'GET','/OpenTourControlTitle'))
+        return self._snapshot(config,self._request(client,'GET',self.route))
 
     def edit(self, principal, scope, client_id, body):
         config,client=self._authorized(principal,scope,client_id)
-        if (not isinstance(body,dict) or set(body)!={'requestId','title','baseVersion'}
+        if (not isinstance(body,dict) or set(body)!={'requestId',self.value_key,'baseVersion'}
                 or not isinstance(body['requestId'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}',body['requestId'])
-                or not isinstance(body['title'],str) or len(body['title'])>100 or any(ord(c)<32 or ord(c)==127 for c in body['title'])
+                or not isinstance(body[self.value_key],str) or len(body[self.value_key])>100 or any(ord(c)<32 or ord(c)==127 for c in body[self.value_key])
                 or not isinstance(body['baseVersion'],str) or not re.fullmatch(r'[a-f0-9]{64}',body['baseVersion'])):
             raise Failure('crm_control_value_invalid',400)
-        operation=hashlib.sha256(json.dumps([principal.subject,client_id,body['requestId']],separators=(',',':')).encode()).hexdigest()
-        payload={'operationId':operation,'title':body['title'],'baseVersion':body['baseVersion'],'actor':principal.subject}
+        identity=[principal.subject,client_id,body['requestId']]
+        if self.field!=CONTROL_FIELD:identity.insert(0,self.field)
+        operation=hashlib.sha256(json.dumps(identity,separators=(',',':')).encode()).hexdigest()
+        payload={'operationId':operation,self.value_key:body[self.value_key],'baseVersion':body['baseVersion'],'actor':principal.subject}
         # Always reconcile exact operation before a possible POST; no automatic second POST.
         try:
-            prior=self._request(client,'GET','/OpenTourControlTitle/status/'+operation)
+            prior=self._request(client,'GET',self.route+'/status/'+operation)
         except Failure as error:
             if error.status!=404:raise
         else:
             result=self._snapshot(config,prior)
             if prior.get('operationId')!=operation or prior.get('saved') is not True:raise Failure('crm_control_response_invalid',503)
             # Upstream also checks the full digest for POST replay; status must prove the same input.
-            if prior.get('baseVersion')!=body['baseVersion'] or prior.get('actor')!=principal.subject or prior['title']!=body['title']:
+            if prior.get('baseVersion')!=body['baseVersion'] or prior.get('actor')!=principal.subject or prior[self.value_key]!=body[self.value_key]:
                 raise Failure('crm_control_conflict',409)
             return result
-        result=self._request(client,'POST','/OpenTourControlTitle',payload)
-        return self._snapshot(config,result,operation,body['title'])
+        result=self._request(client,'POST',self.route,payload)
+        return self._snapshot(config,result,operation,body[self.value_key])
+
+
+def first_name_scope(auth, principal, authorization):
+    return title_scope(auth, principal, authorization, 'crmFirstName')
+
+
+class CRMFirstNameControl(CRMTitleControl):
+    field = 'firstName'
+    value_key = 'firstName'
+    route = '/OpenTourContactFirstName'
+
+    def edit(self, principal, scope, client_id, body):
+        if isinstance(body, dict) and isinstance(body.get('firstName'), str) and not body['firstName'].strip():
+            raise Failure('crm_control_value_invalid', 400)
+        return super().edit(principal, scope, client_id, body)
