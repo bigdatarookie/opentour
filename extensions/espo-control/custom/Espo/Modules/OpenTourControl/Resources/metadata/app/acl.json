@@ -1,0 +1,22 @@
+{
+    "mandatory": {
+        "scopeFieldLevel": {
+            "Contact": {
+                "cOpenTourControlTitle": {
+                    "read": "no",
+                    "edit": "no"
+                }
+            }
+        }
+    },
+    "adminMandatory": {
+        "scopeFieldLevel": {
+            "Contact": {
+                "cOpenTourControlTitle": {
+                    "read": "no",
+                    "edit": "no"
+                }
+            }
+        }
+    }
+}

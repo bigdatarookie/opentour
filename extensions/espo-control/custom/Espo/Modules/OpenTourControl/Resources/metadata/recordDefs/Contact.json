@@ -1,0 +1,6 @@
+{
+    "outputFilterClassNameList": [
+        "__APPEND__",
+        "Espo\\Modules\\OpenTourControl\\Record\\Output\\ControlField"
+    ]
+}

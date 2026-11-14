@@ -1,8 +1,8 @@
-# Confined synthetic Contact.title capability (source only)
+# Confined synthetic Contact control-label capability (source only)
 
 This is a source candidate for a narrow EspoCRM custom API action and
 OS-operator bootstrap command. It does not install itself, create an API user,
-change Roles/mandatory ACL, access existing records, or turn the current GET
+change native users/Roles, access existing records, or turn the current GET
 identity into a writer. No native CRM integration or effective deployed ACL is
 claimed by the synthetic checks.
 
@@ -187,3 +187,39 @@ without another receipt or Contact change. A private stable request file prevent
 blind fresh-key writes after a test interruption. No manual SQL/DDL is used and
 output contains named assertions/counts, no field values or capability. QA owns
 the run and exact-head report; a PHP lint or stub PASS alone is not its result.
+
+## Ordinary CRM projection boundary
+
+The module adds a mandatory field-level read/edit deny for only
+`Contact.cOpenTourControlTitle`, for ordinary users and administrators alike.
+Espo's supported ACL removes forbidden attributes and rejects search predicates
+on them. A Contact Record output filter additionally clears that one attribute
+from generic serialization, including explicit selection, and appends to existing
+native filters. No unrelated scope permissions are granted or replaced. This is
+an additive restriction; install metadata and PHP together and run supported
+rebuild so cached ACL/record definitions reflect the exact candidate.
+
+The capability action uses raw ORM after its own pinned-record/token checks;
+it does not use generic RecordService output. Its read/write remains available.
+Native Contact.title and Account relationship roles are untouched. ReadOnly and
+import/export hints alone did not protect ordinary reads in the earlier candidate.
+The preserved QA instance must verify default list/detail/explicit-select output
+and a forbidden-field search with its existing ordinary reader, plus the scoped
+positive read. Completed storage/CAS regressions need not be replayed for this
+projection-only repair. Source stubs cannot establish effective native ACL.
+
+QA's masked read probe is captured as a regression with an explicit expected
+before/after mode; no credential contents or values are printed. Only the
+existing task-owned fixture directory and loopback port are allowed:
+
+```sh
+python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/opentour-pr24-qa-8fd750743b215cd4 --expect exposed
+# QA copies the reviewed module and runs supported rebuild, then:
+python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/opentour-pr24-qa-8fd750743b215cd4 --expect hidden
+```
+
+The before mode must detect all three matching-value leaks. The after mode
+requires normal list/detail still available, no value in any generic projection,
+forbidden-field filter denied, and a nonempty scoped read still available. The
+QA owner alone runs this on its preserved synthetic instance; this source task
+does not invoke the probe or read its private references.

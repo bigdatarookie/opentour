@@ -11,8 +11,11 @@ namespace Espo\Core\Api {
 }
 namespace Espo\Core\Console {interface Command {public function run(Command\Params $params,IO $io):void;} class IO {public array $lines=[];public function writeLine($s){$this->lines[]=$s;}}}
 namespace Espo\Core\Console\Command {class Params {public function getArgumentList(){return [];}}}
+namespace Espo\ORM {interface Entity {public function clear(string $attribute):void;public function getEntityType():string;}}
+namespace Espo\Core\Record\Output {interface Filter {public function filter(\Espo\ORM\Entity $entity):void;}}
 namespace Espo\Core\ORM {
- class Row {
+ class Row implements \Espo\ORM\Entity {
+  public function clear(string $attribute):void {unset($this->data[$attribute]);}public function getEntityType():string{return $this->type;}
   public array $data=[];public function __construct(public string $type){}
   public function get($k){return $this->data[$k]??null;}public function getId(){return $this->get('id');}
   public function set($k,$v=null){if(is_array($k))$this->data=array_merge($this->data,$k);else $this->data[$k]=$v;return $this;}
@@ -44,6 +47,7 @@ namespace {
  use Espo\Modules\OpenTourControl\Services\TitleControl;use Espo\Modules\OpenTourControl\Api\Title;use Espo\Modules\OpenTourControl\Console\Bootstrap;
  $module=dirname(__DIR__,2).'/extensions/espo-control/custom/Espo/Modules/OpenTourControl';
  require $module.'/Services/TitleControl.php';require $module.'/Api/Title.php';require $module.'/Console/Bootstrap.php';
+ require $module.'/Record/Output/ControlField.php';
  $checks=[];
  function check($name,$condition){global $checks;if(!$condition)throw new \RuntimeException('failed '.$name);$checks[]=$name;}
  function denied($name,$class,$fn){try{$fn();}catch(\Throwable $error){check($name,$error instanceof $class);return;}throw new \RuntimeException('not denied '.$name);}
@@ -80,6 +84,20 @@ namespace {
   check('exact-retry-one-write',$saved===$replayed && $em->writes===2 && $em->locks>=2);
   check('status-reconciles-committed-result',$control->status($config,$edit->operationId)===$saved);
   check('read-reloads-title',$control->read($config)['title']==='Synthetic title');
+  $filter=new \Espo\Modules\OpenTourControl\Record\Output\ControlField();
+  $projection=clone $em->getEntityById('Contact',$config->contactId);$projection->set('title','Native relationship role');
+  $beforeProjection=$projection->data;$filter->filter($projection);unset($beforeProjection[TitleControl::FIELD]);
+  check('generic-output-removes-only-control-field',$projection->data===$beforeProjection);
+  check('filter-does-not-change-stored-control',$control->read($config)['title']==='Synthetic title');
+  $other=new \Espo\Core\ORM\Row('Account');$other->set(TitleControl::FIELD,'unrelated');$filter->filter($other);
+  check('filter-does-not-change-other-entity',$other->get(TitleControl::FIELD)==='unrelated');
+  $acl=json_decode(file_get_contents($module.'/Resources/metadata/app/acl.json'),true);
+  foreach(['mandatory','adminMandatory'] as $kind){
+   check($kind.'-denies-only-control-field',$acl[$kind]===['scopeFieldLevel'=>['Contact'=>[TitleControl::FIELD=>['read'=>'no','edit'=>'no']]]]);
+  }
+  $record=json_decode(file_get_contents($module.'/Resources/metadata/recordDefs/Contact.json'),true);
+  check('generic-filter-appends-without-replacing-native-filters',$record===['outputFilterClassNameList'=>['__APPEND__',\Espo\Modules\OpenTourControl\Record\Output\ControlField::class]]);
+
   $bad=clone $edit;$bad->title='Changed same key';denied('changed-same-operation-conflicts',Conflict::class,fn()=>$control->edit($config,$bad));
   $bad=clone $edit;$bad->operationId=str_repeat('b',64);denied('stale-version-conflicts',Conflict::class,fn()=>$control->edit($config,$bad));
   $bad=clone $edit;$bad->operationId=str_repeat('c',64);$bad->baseVersion=$saved['version'];$bad->title='Must roll back';$em->failReceipt=true;
