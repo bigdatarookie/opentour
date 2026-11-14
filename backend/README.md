@@ -196,8 +196,8 @@ server-authenticated actor + object + stable requestId; author/record/entity/
 field/host overrides are forbidden. It reconciles the native operation receipt
 before any POST and never automatically POSTs a second time after uncertainty.
 Opaque field-version conflicts return409. Unknown outcomes preserve the UI's
-same frozen payload/key; explicit retry reads the exact receipt. CRM card reads
-expose native title as attributes.jobTitle; no Contact.status/Stream write or
+same frozen payload/key; explicit retry reads the exact receipt. General CRM list/card reads never project title. Only the explicitly scoped
+control response populates its editor/display; no Contact.status/Stream write or
 import-description change is introduced. The control form is absent unless the
 explicit role/object capability is available.
 

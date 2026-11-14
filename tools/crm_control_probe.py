@@ -49,7 +49,7 @@ def main():
             run('fill','#crm-control-title','Synthetic edited title')
             js('document.querySelector(".crm-title-form").requestSubmit();true;')
             wait('document.querySelector("#crm-control-title").value==="Synthetic edited title" && !document.querySelector(".crm-title-form button[type=submit]").disabled')
-            check('edit_returns_to_same_crm_card','state.modal.id==='+json.dumps(CLIENT)+' && document.querySelector("#detail-body").textContent.includes("Synthetic edited title")')
+            check('edit_returns_to_same_crm_card','state.modal.id==='+json.dumps(CLIENT)+' && document.querySelector("#crm-control-title").value==="Synthetic edited title"')
             fixture.lose=True
             run('fill','#crm-control-title','Synthetic unknown response title')
             js('document.querySelector(".crm-title-form").requestSubmit();true;')
@@ -69,6 +69,9 @@ def main():
             grant['role']='user'
             js('await loadDetail();true;')
             check('ordinary_role_has_no_write_control','!document.querySelector("#crm-control-title")')
+            check('ordinary_role_card_has_no_title_value','!document.querySelector("#detail-body").textContent.includes("Synthetic concurrent title")')
+            js('window.__ordinaryCard=(await api("/api/clients/"+'+json.dumps(CLIENT)+')).data;true;')
+            check('ordinary_read_api_has_no_title_projection','!JSON.stringify(window.__ordinaryCard).includes("jobTitle") && !JSON.stringify(window.__ordinaryCard).includes("Synthetic concurrent title")')
             print(json.dumps({'mode':'SYNTHETIC UPSTREAM ONLY','passed':len(checks),'checks':checks,'upstreamTitleWrites':fixture.posts,'actualEspoIntegration':'NOT RUN','ownerRecords':False,'nativeQueue':False}))
         finally:
             try:run('close')

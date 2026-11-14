@@ -444,7 +444,6 @@ function renderDetail(kind,item) {
       if (!item.relatedWork.complete) related.append(node('p','','Показана часть доступных работ.'));
     } else related.append(node('p','','Связанные работы недоступны для этого доступа или подключения.'));
     main.append(related);
-    if(item.kind==='person')main.append(detailSection('Должность / поле CRM title',item.attributes?.jobTitle || 'Не указано'));
     if(item.titleControl?.enabled)main.append(crmTitleForm(item));
     if(item.clientConversation?.enabled) main.append(clientConversationForm(item));
     side.append(metadata([['Тип',item.kind === 'organization' ? 'Организация' : 'Физическое лицо'],['Источник','CRM'],['Изменено',item.modifiedAt || 'Не указано']]));
@@ -723,15 +722,15 @@ function crmTitleForm(item) {
   root.append(node('h3','','Изменить title контрольной записи'));
   const label=node('label','','Должность / title (до 100 символов)'),input=node('input'),save=node('button','primary-button','Сохранить title'),status=node('p','connection-status'),reload=button('Сверить актуальное поле',()=>{state.drafts.delete(key);loadDetail();});
   input.id='crm-control-title';input.maxLength=100;label.htmlFor=input.id;save.type='submit';status.setAttribute('role','status');
-  let draft=state.drafts.get(key);if(!draft){draft={title:item.attributes?.jobTitle || '',version:null,frozen:null,saving:false};state.drafts.set(key,draft);}
-  input.value=draft.title;input.readOnly=!!draft.frozen;save.disabled=true;reload.hidden=true;
+  let draft=state.drafts.get(key);if(!draft){draft={title:'',version:null,frozen:null,saving:false};state.drafts.set(key,draft);}
+  input.value=draft.title;input.readOnly=true;save.disabled=true;reload.hidden=true;
   input.addEventListener('input',()=>{draft.title=input.value;});
   const form=node('form','crm-title-form');form.append(label,input,save,status,reload);root.append(form);
   const session=state.session;
   api('/api/clients/'+encodeURIComponent(item.id)+'/title-control').then(({data})=>{
     if(session!==state.session || !root.isConnected)return;
-    if(!draft.frozen && !draft.version)draft.version=data.version;
-    save.disabled=draft.saving;status.textContent='Только поле title этой контрольной записи.';
+    if(!draft.frozen && !draft.version){draft.version=data.version;draft.title=data.title;input.value=draft.title;}
+    input.readOnly=!!draft.frozen;save.disabled=draft.saving;status.textContent='Только поле title этой контрольной записи.';
   }).catch(()=>{if(root.isConnected)status.textContent='Контрольный writer недоступен. Данные не изменены.';});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(save.disabled || draft.saving)return;draft.saving=true;save.disabled=true;input.readOnly=true;

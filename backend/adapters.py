@@ -64,7 +64,7 @@ class JsonGET:
             raise Failure('source_unavailable', 503) from None
 
 
-CRM_FIELDS = 'id,name,firstName,lastName,emailAddress,phoneNumber,title,description,modifiedAt,createdAt'
+CRM_FIELDS = 'id,name,firstName,lastName,emailAddress,phoneNumber,description,modifiedAt,createdAt'
 
 
 class EspoCRM:
