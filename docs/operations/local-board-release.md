@@ -30,6 +30,7 @@ Run activation only after the separate `auth:local-runtime-upgrade` gate is reso
      --release-dir "/Users/garry/Library/Application Support/OpenTour/releases/1ed7c1f" \
      --app-root "/Users/garry/Library/Application Support/OpenTour" \
      --python /Users/garry/.local/bin/python3.11 \
+     --work-root /Users/garry/Documents/git/opentour/opentour-rig \
      --auth-file "/Users/garry/Library/Application Support/OpenTour/auth/system-qa-grants.json" \
      --database "/Users/garry/Library/Application Support/OpenTour/state/board/board.sqlite3" \
      --output-dir "/Users/garry/Library/Application Support/OpenTour/staged-agents/1ed7c1f"
@@ -142,3 +143,42 @@ the existing profile; readback without the matching explicit references rejects
 a plist that adds them. No credential file, identity or grant is created or
 modified by rendering. This makes the local adoption plan executable without
 bypassing the old renderer's default no-CRM-reference profile.
+
+## Native work root is separate from release source
+
+The accepted PR24 runtime uses explicit server `--work-root
+/Users/garry/Documents/git/opentour/opentour-rig`. Its immutable release archive
+is application source, not the registered live native mission workspace: the
+archive lacks the registered `project.yaml`/mission `SPEC.md` contour. Defaulting
+to that archive's `opentour-rig` caused `/api/board`503; the existing explicit
+server flag restored the five-slice native board without changing the worker,
+DB, grants, conversations or proposals.
+
+Pass that same absolute registered source operand to `render-agents --work-root`.
+The helper checks that the directory, `project.yaml`, and
+`missions/01-local-information-layer/SPEC.md` plus `slices/` exist, using only
+filesystem metadata. It does not read their contents, register/copy a mission,
+query the daemon, or prove registry membership. Registration and actual native
+scope remain the consumer's checks. Relative/incomplete roots are rejected;
+the resolved absolute path is rendered only for the server. With no operand the
+old server default is preserved; this compatibility default does not establish
+native availability for an archived release.
+
+For readback, pass the identical explicit `work_root=Path(...)` to
+`validate_launch_agents` together with the exact release, DB, auth and existing
+optional CRM/control references. It validates staged or installed plist paths
+without loading them. Missing, different, repeated, equals-form or unrequested
+root arguments reject, and any worker work-root argument rejects. The worker's
+source/DB/arguments are otherwise identical to the omitted-root render. Keep all
+previous private-reference and exact-release validation in the same call.
+
+After independent Code QA, DevOps can consume this bounded repair without a
+service restart: render into a fresh private staging directory against the
+already accepted working release, same Python/DB/auth/private-reference paths,
+and this explicit root; then validate both staged and installed plist pairs
+against those same expected operands. Compare the server's already-working
+`--work-root` and confirm worker equality. Do not install/restart, migrate DB,
+change references or repeat the accepted two-round client journey for this
+render/readback check. If installed arguments differ, report the exact mismatch
+before any separately authorized runtime action. No renderer operation calls
+launchctl, opens the database, reads credential contents or mutates native work.
