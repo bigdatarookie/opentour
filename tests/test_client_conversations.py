@@ -154,13 +154,15 @@ class ConversationTests(unittest.TestCase):
             restore_schema4_backup(self.store.path,backup,False)
         restore_schema4_backup(self.store.path,backup,True)
         with sqlite3.connect(self.store.path) as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],4)
-        self.store=BoardStore(self.store.path);self.open()
-        with self.assertRaisesRegex(ReleaseError,'new_schema_data'):
-            restore_schema4_backup(self.store.path,backup,True)
-        # Even a worker heartbeat with no conversation data forbids snapshot replacement.
+        self.store=BoardStore(self.store.path)
+        # A worker heartbeat with no conversation data already forbids replacement.
         with self.store.db() as db:
-            db.execute('DELETE FROM client_conversations')
+            db.execute("INSERT INTO delivery_worker VALUES(1,'synthetic-service','2026-01-01T00:00:00Z',NULL)")
         with self.assertRaisesRegex(ReleaseError,'database_changed_since_backup'):
+            restore_schema4_backup(self.store.path,backup,True)
+        with self.store.db() as db:db.execute('DELETE FROM delivery_worker')
+        self.open()
+        with self.assertRaisesRegex(ReleaseError,'new_schema_data'):
             restore_schema4_backup(self.store.path,backup,True)
 
     def test_schema4_migration_preserves_messages_and_outbox(self):
