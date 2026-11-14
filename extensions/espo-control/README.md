@@ -105,7 +105,9 @@ run against the live CRM during source work.
    `data/opentour-control-writer.json` into the app's existing private runtime
    area. The upstream binding `data/opentour-control.json` contains only the
    pinned ID, marker and token hash. It is not a generic endpoint config.
-6. Enable backend `--crm-control-credential-file <private-writer-reference>` and
+6. Enable backend `--crm-control-credential-file <private-writer-reference>` (the
+   reviewed render-agents helper accepts/validates that same explicit private
+   reference, passes it only to the server, and never reads its contents) and
    a separate exact app bearer grant extension `crmControlTitle` for that same
    typed Contact. Keep the old GET-only credential unchanged and separately
    supplied for CRM card reads. Only the reviewed local adoption owner changes
