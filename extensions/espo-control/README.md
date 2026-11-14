@@ -218,8 +218,12 @@ python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/o
 python3 tools/crm_control_projection_probe.py --private-directory /private/tmp/opentour-pr24-qa-8fd750743b215cd4 --expect hidden
 ```
 
-The before mode must detect all three matching-value leaks. The after mode
+The filter uses supported PHP nested-array `where[0][...]` query keys; a scalar
+JSON `where=` is ignored by Espo and cannot test denial. The before mode must
+detect all three matching-value leaks. The after mode
 requires normal list/detail still available, no value in any generic projection,
-forbidden-field filter denied, and a nonempty scoped read still available. The
+forbidden-field filter denied (400 or403 with no records/value), a positive
+firstName filter returning the exact synthetic Contact, and a nonempty scoped
+read still available. The
 QA owner alone runs this on its preserved synthetic instance; this source task
 does not invoke the probe or read its private references.

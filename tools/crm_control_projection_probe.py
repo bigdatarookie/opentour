@@ -33,7 +33,13 @@ def request(path, auth_header, auth_value):
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
-        return error.code, {}
+        # Inspect the denial body too: a failure status must not hide returned data.
+        raw = error.read().decode('utf-8', errors='replace')
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {'_nonJsonBody': raw}
+        return error.code, body if isinstance(body, dict) else {'_body': body}
 
 
 credentials = base64.b64encode(f"{USERNAME}:{password}".encode()).decode()
@@ -87,15 +93,45 @@ result = {
         row.get("id") == contact_id for row in listing.get("list", [])
     ),
 }
-where = json.dumps([{'type': 'equals', 'attribute': FIELD, 'value': control_value}])
-filter_status, _ = request('/Contact?' + urllib.parse.urlencode({'where': where}), 'Espo-Authorization', user_auth)
+def filtered(attribute, value):
+    # PHP parses this supported nested-array shape into where[0], not a scalar.
+    query = urllib.parse.urlencode({
+        'where[0][type]': 'equals',
+        'where[0][attribute]': attribute,
+        'where[0][value]': value,
+        'maxSize': '20',
+    })
+    return request('/Contact?' + query, 'Espo-Authorization', user_auth)
+
+
+first_name = detail.get('firstName')
+normal_status, normal_data = filtered('firstName', first_name or '')
+normal_rows = normal_data.get('list', [])
+normal_filter_passed = (
+    bool(first_name) and normal_status == 200 and len(normal_rows) == 1
+    and normal_rows[0].get('id') == contact_id
+    and normal_rows[0].get('firstName') == first_name
+)
+filter_status, filter_data = filtered(FIELD, control_value or '')
+filter_body = json.dumps(filter_data, ensure_ascii=False)
+filter_no_records = (
+    not filter_data.get('list') and not filter_data.get('total')
+    and contact_id not in filter_body
+)
+filter_no_value = bool(control_value) and control_value not in filter_body
+filter_denied = filter_status in (400, 403) and filter_no_records and filter_no_value
+result['normalFirstNameFilterStatus'] = normal_status
+result['normalFirstNameFilterPassed'] = normal_filter_passed
 result['controlFieldFilterStatus'] = filter_status
+result['controlFieldFilterHasNoRecords'] = filter_no_records
+result['controlFieldFilterHasNoValue'] = filter_no_value
+result['controlFieldFilterDenied'] = filter_denied
 projections = [(list_status, list_row), (detail_status, detail), (selected_status, selected_row)]
 positive = control_status == 200 and control.get('field') == FIELD and bool(control_value)
 if args.expect == 'exposed':
-    passed = positive and all(status == 200 and FIELD in row and row[FIELD] == control_value for status, row in projections)
+    passed = positive and normal_filter_passed and all(status == 200 and FIELD in row and row[FIELD] == control_value for status, row in projections)
 else:
-    passed = positive and list_status == detail_status == 200 and bool(list_row) and bool(detail) and all(status in (200, 403) and FIELD not in row for status, row in projections) and filter_status == 403
+    passed = positive and normal_filter_passed and list_status == detail_status == 200 and bool(list_row) and bool(detail) and all(status in (200, 403) and FIELD not in row for status, row in projections) and filter_denied
 result['expectedBoundary'] = args.expect
 result['passed'] = passed
 print(json.dumps(result, sort_keys=True))
