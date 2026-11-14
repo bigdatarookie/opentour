@@ -46,7 +46,7 @@ namespace {
  use Espo\Core\ORM\EntityManager;use Espo\Core\Exceptions\{BadRequest,Forbidden,Conflict,NotFound};
  use Espo\Modules\OpenTourControl\Services\TitleControl;use Espo\Modules\OpenTourControl\Api\Title;use Espo\Modules\OpenTourControl\Console\Bootstrap;
  $module=dirname(__DIR__,2).'/extensions/espo-control/custom/Espo/Modules/OpenTourControl';
- require $module.'/Services/TitleControl.php';require $module.'/Api/Title.php';require $module.'/Console/Bootstrap.php';
+ require $module.'/Services/TitleControl.php';require $module.'/Services/FirstNameControl.php';require $module.'/Api/Title.php';require $module.'/Api/FirstName.php';require $module.'/Console/Bootstrap.php';
  require $module.'/Record/Output/ControlField.php';
  $checks=[];
  function check($name,$condition){global $checks;if(!$condition)throw new \RuntimeException('failed '.$name);$checks[]=$name;}
@@ -118,7 +118,30 @@ namespace {
   $bad=clone $request;$bad->query=['entity'=>'Account'];denied('query-overrides-deny',Forbidden::class,fn()=>$api->process($bad));
   $bad=clone $request;$bad->method='DELETE';denied('delete-denies',Forbidden::class,fn()=>$api->process($bad));
   $bad=clone $request;$bad->headers=[];denied('missing-capability-header-denies',Forbidden::class,fn()=>$api->process($bad));
-  $routes=json_decode(file_get_contents($module.'/Resources/routes.json'),true);check('only-three-fixed-upstream-routes',count($routes)===3 && array_unique(array_column($routes,'actionClassName'))===['Espo\\Modules\\OpenTourControl\\Api\\Title']);
+  $nativeMetadata=new \Espo\Core\Utils\Metadata(['entityDefs'=>['Contact'=>['fields'=>['firstName'=>['type'=>'varchar','maxLength'=>100]]]]]);
+  $names=new \Espo\Modules\OpenTourControl\Services\FirstNameControl($em,$nativeMetadata);
+  $contact=$em->getEntityById('Contact',$config->contactId);$contact->set('firstName','Fictional');$contact->set('title','Relationship role');
+  $beforeName=$contact->data;$nameBase=$names->read($config);
+  $nameBody=(object)['operationId'=>$edit->operationId,'firstName'=>'Synthetic revised','baseVersion'=>$nameBase['version'],'actor'=>'synthetic-app-admin'];
+  denied('label-receipt-not-native-name-receipt',NotFound::class,fn()=>$names->status($config,$edit->operationId));
+  $nameSaved=$names->edit($config,$nameBody);
+  check('native-name-fixed-field-saved',$nameSaved['field']==='firstName' && $nameSaved['firstName']==='Synthetic revised');
+  check('native-name-replay-stable',$names->edit($config,$nameBody)===$nameSaved);
+  $freshNames=new \Espo\Modules\OpenTourControl\Services\FirstNameControl($em,$nativeMetadata);
+  check('native-name-fresh-service-read',$freshNames->read($config)['firstName']==='Synthetic revised');
+  check('name-edit-preserves-label-marker-and-role',$contact->get('description')===$beforeName['description'] && $contact->get('title')===$beforeName['title'] && $contact->get(TitleControl::FIELD)===$beforeName[TitleControl::FIELD]);
+  foreach(['', '   ', str_repeat('x',101),"bad\nname"] as $value){$bad=clone $nameBody;$bad->firstName=$value;denied('bad-native-name-'.count($checks),BadRequest::class,fn()=>$names->edit($config,$bad));}
+  $bad=clone $nameBody;$bad->field='description';denied('caller-native-field-denied',BadRequest::class,fn()=>$names->edit($config,$bad));
+  $bad=clone $nameBody;$bad->firstName='Changed same key';denied('native-name-key-conflict',Conflict::class,fn()=>$names->edit($config,$bad));
+  $bad=clone $nameBody;$bad->operationId=str_repeat('d',64);denied('native-name-stale-conflict',Conflict::class,fn()=>$names->edit($config,$bad));
+  $nativeApi=new \Espo\Modules\OpenTourControl\Api\FirstName($names);
+  check('native-action-fixed-field-read',$nativeApi->process($request)->data['field']==='firstName');
+  $bad=clone $nameBody;$bad->operationId=str_repeat('e',64);$bad->baseVersion=$nameSaved['version'];$bad->firstName='Must roll back';$em->failReceipt=true;
+  denied('native-name-receipt-failure-rolls-back',\RuntimeException::class,fn()=>$names->edit($config,$bad));$em->failReceipt=false;
+  check('native-name-rollback-preserves-field',$names->read($config)['firstName']==='Synthetic revised');
+  $routes=json_decode(file_get_contents($module.'/Resources/routes.json'),true);
+  check('only-six-fixed-upstream-routes',count($routes)===6 && count(array_unique(array_column($routes,'actionClassName')))===2);
+
   echo json_encode(['mode'=>'SYNTHETIC PHP STUBS','checks'=>count($checks),'passed'=>$checks,'actualEspoORMIntegration'=>'NOT RUN']).PHP_EOL;
  } finally {foreach(glob($temp.'/data/*') as $file)unlink($file);rmdir($temp.'/data');chdir('/tmp');rmdir($temp);}
 }

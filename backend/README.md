@@ -219,3 +219,15 @@ No general list/card projection includes either native title or the custom
 field. Storage-bound versions/receipts prevent old false virtual-title receipts
 from replaying as new storage success. See the extension migration/regression
 contract; do not manually add SQL columns or alter relationship roles.
+
+
+Native Contact firstName edit is separately enabled by exact `crmFirstName`
+record grants (administrator/project scope), using the existing private
+`--crm-control-credential-file` reference. GET/POST
+`/api/clients/<crm:Contact:id>/first-name` accepts exactly
+`{requestId,firstName,baseVersion}`; the fixed native field uses independent
+operation/receipt namespaces and fresh readback. The ordinary card exposes
+`attributes.firstName`; `firstNameEdit.enabled` advertises only the authorized
+pinned object. No generic field write, Contact.status or CRM Stream write exists.
+See the extension README for native semantics, independent disposable integration
+and controlled adoption; synthetic backend/browser tests do not prove native ORM.

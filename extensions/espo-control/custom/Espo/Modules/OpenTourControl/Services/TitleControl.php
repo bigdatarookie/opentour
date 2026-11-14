@@ -9,11 +9,12 @@ use Espo\Core\Exceptions\{BadRequest,Forbidden,Conflict,NotFound};
 class TitleControl
 {
     public const FIELD = 'cOpenTourControlTitle';
-    public function __construct(private EntityManager $em, Metadata $metadata) {self::requireStorage($metadata);}
+    protected const VALUE_KEY = 'title';
+    public function __construct(private EntityManager $em, Metadata $metadata) {static::requireStorage($metadata);}
 
     public static function requireStorage(Metadata $metadata): void
     {
-        $path=['entityDefs','Contact','fields',self::FIELD];
+        $path=['entityDefs','Contact','fields',static::FIELD];
         if ($metadata->get([...$path,'type'])!=='varchar' || $metadata->get([...$path,'maxLength'])!==100
             || $metadata->get([...$path,'notStorable'])!==false || $metadata->get([...$path,'select'])!==null) {
             throw new Forbidden('control_storage_not_installed');
@@ -52,8 +53,8 @@ class TitleControl
 
     private function snapshot($contact): array
     {
-        $data=['entity'=>'Contact','id'=>$contact->getId(),'field'=>self::FIELD,'title'=>$contact->get(self::FIELD) ?? ''];
-        $data['version']=hash('sha256',json_encode([self::FIELD,$data['id'],$data['title'],$contact->get('modifiedAt')],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
+        $data=['entity'=>'Contact','id'=>$contact->getId(),'field'=>static::FIELD,static::VALUE_KEY=>$contact->get(static::FIELD) ?? ''];
+        $data['version']=hash('sha256',json_encode([static::FIELD,$data['id'],$data[static::VALUE_KEY],$contact->get('modifiedAt')],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
         return $data;
     }
 
@@ -68,14 +69,14 @@ class TitleControl
 
     private function receiptId(string $operation): string
     {
-        return substr(hash('sha256','OpenTourControlTitle:'.self::FIELD.':'.$operation),0,17);
+        return substr(hash('sha256','OpenTourControlTitle:'.static::FIELD.':'.$operation),0,17);
     }
 
     private function receipt(string $operation): ?object
     {
         $row=$this->em->getEntityById('UniqueId',$this->receiptId($operation));
         if (!$row) return null;
-        if ($row->get('name')!=='OpenTourControlTitle:'.self::FIELD.':'.$operation) throw new Conflict('control_receipt_collision');
+        if ($row->get('name')!=='OpenTourControlTitle:'.static::FIELD.':'.$operation) throw new Conflict('control_receipt_collision');
         return $row->get('data');
     }
 
@@ -85,20 +86,22 @@ class TitleControl
     {
         if (!preg_match('/^[a-f0-9]{64}$/D',$operation)) throw new BadRequest('control_operation_invalid');
         $data=$this->receipt($operation);
-        if (!$data || ($data->result->id ?? null)!==$config->contactId || ($data->result->field ?? null)!==self::FIELD) throw new NotFound('control_operation_not_found');
+        if (!$data || ($data->result->id ?? null)!==$config->contactId || ($data->result->field ?? null)!==static::FIELD) throw new NotFound('control_operation_not_found');
         return (array)$data->result;
     }
 
+    protected static function validValue($value): bool {return true;}
+
     public function edit(object $config, object $body): array
     {
-        self::exact($body,['operationId','title','baseVersion','actor']);
-        if (!is_string($body->operationId) || !preg_match('/^[a-f0-9]{64}$/D',$body->operationId)
-            || !is_string($body->title) || mb_strlen($body->title)>100 || preg_match('/[\x00-\x1f\x7f]/u',$body->title)
+        self::exact($body,['operationId',static::VALUE_KEY,'baseVersion','actor']);
+        if (!static::validValue($body->{static::VALUE_KEY}) || !is_string($body->operationId) || !preg_match('/^[a-f0-9]{64}$/D',$body->operationId)
+            || !is_string($body->{static::VALUE_KEY}) || mb_strlen($body->{static::VALUE_KEY})>100 || preg_match('/[\x00-\x1f\x7f]/u',$body->{static::VALUE_KEY})
             || !is_string($body->baseVersion) || !preg_match('/^[a-f0-9]{64}$/D',$body->baseVersion)
             || !is_string($body->actor) || $body->actor==='' || mb_strlen($body->actor)>128) {
             throw new BadRequest('control_value_invalid');
         }
-        $digest=hash('sha256',json_encode([$config->contactId,$body->title,$body->baseVersion,$body->actor],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
+        $digest=hash('sha256',json_encode([$config->contactId,$body->{static::VALUE_KEY},$body->baseVersion,$body->actor],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
         return $this->em->getTransactionManager()->run(function() use($config,$body,$digest) {
             $contact=$this->contact($config,true); // Serialize CAS + same-operation receipt on this exact row.
             $existing=$this->receipt($body->operationId);
@@ -107,14 +110,14 @@ class TitleControl
                 return (array)$existing->result;
             }
             if ($this->snapshot($contact)['version']!==$body->baseVersion) throw new Conflict('control_version_conflict');
-            $contact->set(self::FIELD,$body->title); // No generic entity, ID or field from the caller.
+            $contact->set(static::FIELD,$body->{static::VALUE_KEY}); // No generic entity, ID or field from the caller.
             $this->em->saveEntity($contact,['skipHooks'=>true]); // Synthetic control: suppress unrelated business hooks; normal audit timestamps remain.
             $stored=$this->contact($config);
-            if (($stored->get(self::FIELD) ?? '')!==$body->title) throw new Conflict('control_storage_verification_failed');
+            if (($stored->get(static::FIELD) ?? '')!==$body->{static::VALUE_KEY}) throw new Conflict('control_storage_verification_failed');
             $result=$this->snapshot($stored)+['operationId'=>$body->operationId,'saved'=>true,'baseVersion'=>$body->baseVersion,'actor'=>$body->actor];
             $receipt=$this->em->getNewEntity('UniqueId');
             $receipt->set('id',$this->receiptId($body->operationId));
-            $receipt->set('name','OpenTourControlTitle:'.self::FIELD.':'.$body->operationId);
+            $receipt->set('name','OpenTourControlTitle:'.static::FIELD.':'.$body->operationId);
             $receipt->set('data',(object)['digest'=>$digest,'result'=>(object)$result]);
             // Null terminateAt keeps the existing system receipt until explicit safe cleanup.
             $this->em->saveEntity($receipt);

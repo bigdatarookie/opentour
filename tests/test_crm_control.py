@@ -18,6 +18,10 @@ TOKEN='synthetic-control-capability-'+'x'*32
 
 
 class ControlTests(unittest.TestCase):
+    route='/OpenTourControlTitle'
+    field='cOpenTourControlTitle'
+    value_key='title'
+    control_class=CRMTitleControl
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.reference=Path(self.tmp.name)/'writer.json';self.reference.write_text(json.dumps({'contactId':ID,'token':TOKEN}));self.reference.chmod(0o600)
@@ -30,21 +34,21 @@ class ControlTests(unittest.TestCase):
             def do_GET(self):
                 fixture.calls.append((self.command,self.path,dict(self.headers)))
                 if self.headers.get('X-OpenTour-Control')!=TOKEN:return self.response(403,{})
-                if self.path=='/api/v1/OpenTourControlTitle':return self.response(200,fixture.snapshot())
-                if self.path.startswith('/api/v1/OpenTourControlTitle/status/'):
+                if self.path=='/api/v1'+fixture.route:return self.response(200,fixture.snapshot())
+                if self.path.startswith('/api/v1'+fixture.route+'/status/'):
                     if fixture.fail_lookup:return self.response(503,{})
                     row=fixture.receipts.get(self.path.rsplit('/',1)[1]);return self.response(200 if row else 404,row or {})
                 return self.response(403,{})
             def do_POST(self):
                 fixture.calls.append((self.command,self.path,dict(self.headers)))
-                if self.path!='/api/v1/OpenTourControlTitle' or self.headers.get('X-OpenTour-Control')!=TOKEN:return self.response(403,{})
+                if self.path!='/api/v1'+fixture.route or self.headers.get('X-OpenTour-Control')!=TOKEN:return self.response(403,{})
                 data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                if set(data)!={'operationId','title','baseVersion','actor'}:return self.response(400,{})
+                if set(data)!={'operationId',fixture.value_key,'baseVersion','actor'}:return self.response(400,{})
                 if data['operationId'] in fixture.receipts:
                     old=fixture.receipts[data['operationId']]
-                    return self.response(200 if all(old[k]==data[k] for k in ('title','baseVersion','actor')) else 409,old)
+                    return self.response(200 if all(old[k]==data[k] for k in (fixture.value_key,'baseVersion','actor')) else 409,old)
                 if data['baseVersion']!=fixture.snapshot()['version']:return self.response(409,{})
-                fixture.title=data['title'];fixture.revision+=1;fixture.posts+=1
+                fixture.title=data[fixture.value_key];fixture.revision+=1;fixture.posts+=1
                 result={**fixture.snapshot(),**{k:data[k] for k in ('operationId','baseVersion','actor')},'saved':True};fixture.receipts[data['operationId']]=result
                 if fixture.lose:
                     fixture.lose=False;self.send_response(200);self.end_headers();self.wfile.write(b'incomplete-json');return
@@ -53,12 +57,12 @@ class ControlTests(unittest.TestCase):
             do_DELETE=do_PUT
         self.upstream=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         self.thread=threading.Thread(target=self.upstream.serve_forever,daemon=True);self.thread.start();self.addCleanup(self.close)
-        self.control=CRMTitleControl(self.reference,'http://127.0.0.1:'+str(self.upstream.server_port))
+        self.control=self.control_class(self.reference,'http://127.0.0.1:'+str(self.upstream.server_port))
         self.scope=(CLIENT,)
 
     def close(self):self.upstream.shutdown();self.upstream.server_close();self.thread.join()
-    def snapshot(self):return {'entity':'Contact','id':ID,'field':'cOpenTourControlTitle','title':self.title,'version':hashlib.sha256(str(self.revision).encode()).hexdigest()}
-    def body(self,request='synthetic-edit-001',**extra):return {'requestId':request,'title':'Updated synthetic title','baseVersion':self.snapshot()['version'],**extra}
+    def snapshot(self):return {'entity':'Contact','id':ID,'field':self.field,self.value_key:self.title,'version':hashlib.sha256(str(self.revision).encode()).hexdigest()}
+    def body(self,request='synthetic-edit-001',**extra):return {'requestId':request,self.value_key:'Updated synthetic title','baseVersion':self.snapshot()['version'],**extra}
     def failure(self,code,fn):
         with self.assertRaises(Failure) as caught:fn()
         self.assertEqual(caught.exception.code,code)

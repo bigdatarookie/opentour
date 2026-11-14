@@ -227,3 +227,61 @@ firstName filter returning the exact synthetic Contact, and a nonempty scoped
 read still available. The
 QA owner alone runs this on its preserved synthetic instance; this source task
 does not invoke the probe or read its private references.
+
+## Fixed native firstName edit
+
+The native Contact business field `firstName` in stock Espo10.0.11 is varchar100,
+with a real indexed column and no notStorable/select override (upstream commit
+32d559ba86d3be607599d1325c359668c1178850, CRM Contact entityDefs). This candidate
+adds no field/schema or Contact metadata override for it. A separate fixed
+`OpenTourContactFirstName` GET/POST/status route uses the same exact synthetic
+Contact binding/capability, marker, row lock, transaction, fresh readback and
+receipt logic. The server-selected service fixes FIELD=firstName and transport
+key firstName; browser-supplied field/entity/ID/host/author are rejected. Names
+must be nonblank strings of at most100 characters without control characters.
+Native Contact.title and the hidden cOpenTourControlTitle are preserved.
+
+The app requires a SEPARATE exact server-owned grant:
+`crmFirstName: ["crm:Contact:<pinned-synthetic-id>"]`, administrator role and
+existing project scope. `crmControlTitle` alone never enables native name edit.
+The same already-private writer reference is used; no GET identity/key/user/Role
+is broadened. The route is `/api/clients/<typed-id>/first-name`; body is exactly
+`{requestId,firstName,baseVersion}`. Server attribution uses the bearer subject.
+Both backend operation identity and upstream version/receipt namespace separate
+firstName from label operations; old receipts and bootstrap binding remain.
+Unknown effects retain a frozen request and reconcile exact status before POST.
+Native ordinary reads are expected to show firstName; only the custom label
+remains hidden. The card displays the native firstName and refreshed display name.
+
+Independent integration must use a task-owned disposable Espo instance and one
+marked synthetic Contact, install only the exact reviewed module and rebuild via
+supported CLI, and retain a stable private request. No author live calls were
+made. `tools/php/crm_first_name_regression.php` requires
+`OPENTOUR_DISPOSABLE_CRM_TEST=opentour-first-name-qa` before loading Espo. After
+QA's authorized fixture bootstrap, run it as the runtime PHP user outside the
+production module. It verifies a fresh Application/EntityManager database read,
+native computed name, all other business values (including marker/control label/
+native role), and exact replay without another receipt or Contact mutation.
+The backend/browser checks use only synthetic HTTP fixtures. QA must additionally
+verify real HTTP backend/card read persistence and denials; stubs/HTTP200 alone
+are not acceptance. No completed conversation/proposal journey needs replay.
+
+Later controlled adoption requires the independently accepted exact module/app
+candidate, preserve existing binding/receipt files, explicit new per-field grant
+for ONLY the already authorized synthetic Contact, and retained private GET and
+writer references. No schema migration is required. DevOps owns safe server
+activation/rebuild/reload checks and must preserve outbox/DB/grants/unknown effects.
+No new bootstrap nonce/Contact, API credential or general writer is needed.
+Revoke this edit by removing crmFirstName; auth rereads grants per request.
+Do not delete native field data or receipts on rollback. Old label access remains
+separately granted and compatible. Technical scope never grants owner-record writes.
+
+Operation coverage: app user messages are persisted BoardStore comments, not CRM
+Stream posts; native queue owns task states. Stock Contact has stream=true and
+native Note has a post field/type Post, but this backend has NO CRM Stream/Note
+write route. Stock Contact has no lifecycle status field; meeting/call acceptance
+status is an activity relationship, not Contact status. No status taxonomy is
+invented. Completing status/comment semantics needs the selected business entity,
+allowed status transitions, and whether comments should be CRM Stream posts or
+only the existing linked app conversation, plus corresponding exact write scope.
+The independent name edit does not wait for that decision or claim it is resolved.
