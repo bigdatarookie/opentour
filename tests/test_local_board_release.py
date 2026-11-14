@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend.board_store import BoardStore
 from tools.local_board_release import (
     ReleaseError,
     backup_database,
@@ -49,6 +48,14 @@ def make_schema3(path: Path) -> None:
     os.chmod(path, 0o600)
 
 
+def migrate_legacy_schema4(path):
+    # Exercise the retained schema3->4 rollback contract, not today's schema5 upgrade.
+    with sqlite3.connect(path) as db:
+        db.execute('ALTER TABLE task_execution ADD COLUMN destination TEXT')
+        db.execute('ALTER TABLE outbox ADD COLUMN routing_ref TEXT')
+        db.execute('PRAGMA user_version=4')
+
+
 class LocalBoardReleaseTests(unittest.TestCase):
     def test_schema3_backup_migrates_and_pretraffic_restore_preserves_rows(self):
         with tempfile.TemporaryDirectory(prefix="opentour-release-test-") as raw:
@@ -63,7 +70,7 @@ class LocalBoardReleaseTests(unittest.TestCase):
             self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
             self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
 
-            BoardStore(db_path)
+            migrate_legacy_schema4(db_path)
             migrated = inspect_database(db_path)
             self.assertEqual(migrated["user_version"], 4)
             self.assertEqual(migrated["integrity"], "ok")
@@ -88,7 +95,7 @@ class LocalBoardReleaseTests(unittest.TestCase):
             db_path = root / "board.sqlite3"
             make_schema3(db_path)
             backup, _, _ = backup_database(db_path, root / "backups")
-            BoardStore(db_path)
+            migrate_legacy_schema4(db_path)
             db = sqlite3.connect(db_path)
             db.execute("UPDATE outbox SET state='pending' WHERE id='delivery_synthetic_01'")
             db.commit()
@@ -103,7 +110,7 @@ class LocalBoardReleaseTests(unittest.TestCase):
             db_path = root / "board.sqlite3"
             make_schema3(db_path)
             backup, _, _ = backup_database(db_path, root / "backups")
-            BoardStore(db_path)
+            migrate_legacy_schema4(db_path)
             db = sqlite3.connect(db_path)
             db.execute("UPDATE outbox SET routing_ref='qitem-synthetic-02' WHERE id='delivery_synthetic_01'")
             db.commit()
@@ -147,6 +154,25 @@ class LocalBoardReleaseTests(unittest.TestCase):
                 data = plistlib.loads(path.read_bytes())
                 self.assertTrue(data["KeepAlive"])
                 self.assertEqual(data["WorkingDirectory"], str(release))
+
+    def test_render_private_read_and_control_references_only_when_explicit(self):
+        with tempfile.TemporaryDirectory(prefix='opentour-reference-plist-') as raw:
+            root=Path(raw);release=root/'abcdef1';release.mkdir()
+            crm=root/'crm.json';controls=root/'controls.json'
+            for path in (crm,controls):path.write_text('synthetic-invalid-json-never-read');path.chmod(0o600)
+            auth=root/'auth.json';db=root/'data'/'board.sqlite3'
+            paths=render_launch_agents(release,root/'app',Path(sys.executable),auth,db,root/'plists',crm,controls)
+            self.assertTrue(validate_launch_agents(paths,release,db,auth,crm,controls)['valid'])
+            with self.assertRaisesRegex(ReleaseError,'must_not_add_crm_credentials'):
+                validate_launch_agents(paths,release,db,auth)
+            server=next(p for p in paths if '.server.' in p.name)
+            worker=next(p for p in paths if '.worker.' in p.name)
+            worker_args=plistlib.loads(worker.read_bytes())['ProgramArguments']
+            self.assertNotIn('--crm-credential-file',worker_args);self.assertNotIn('--client-controls-file',worker_args)
+            data=plistlib.loads(server.read_bytes());data['ProgramArguments'][data['ProgramArguments'].index('--client-controls-file')+1]=str(root/'wrong.json')
+            server.write_bytes(plistlib.dumps(data))
+            with self.assertRaisesRegex(ReleaseError,'private_reference_mismatch'):
+                validate_launch_agents(paths,release,db,auth,crm,controls)
 
     def test_stage_extracts_exact_commit_without_checkout_metadata(self):
         with tempfile.TemporaryDirectory(prefix="opentour-stage-source-") as raw:

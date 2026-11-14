@@ -62,7 +62,7 @@ class RelationTests(unittest.TestCase):
             before={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         store = BoardStore(self.path)
         with store.db() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 5)
             after={name:[tuple(r) for r in db.execute('SELECT '+','.join(cols)+' FROM '+name)] for name,cols in columns.items()}
         self.assertEqual(before, after)
         self.assertIsNone(store.detail(USER, task['id'])['clientRef'])

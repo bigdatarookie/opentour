@@ -120,10 +120,10 @@ def _json_value(value):
     return {"type": type(value).__name__, "value": value}
 
 
-def _logical_digest(db: sqlite3.Connection, schema: dict[str, list[str]]) -> str:
+def _logical_digest(db: sqlite3.Connection, schema: dict[str, list[str]], allowed_extra_tables=()) -> str:
     """Fingerprint table rows privately; return only a digest, never row values."""
     current = _tables(db)
-    if set(current) != set(schema):
+    if set(current) - set(allowed_extra_tables) != set(schema):
         raise ReleaseError("database_table_set_changed_since_backup")
     digest = hashlib.sha256()
     for table in sorted(schema):
@@ -305,30 +305,30 @@ def _read_manifest(backup: Path) -> tuple[Path, dict]:
     return backup, manifest
 
 
-def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
-    """Restore a schema-3 pre-PR20 snapshot only before app/outbox data changes."""
+def _restore_backup(database: Path, backup: Path, services_stopped: bool, old_schema, new_schema, guard, extra_tables=()) -> dict:
+    """Restore a verified pre-migration snapshot only before any application effect."""
     if not services_stopped:
         raise ReleaseError("services_must_be_stopped_before_restore")
     database = _private_file(database.expanduser().absolute())
     backup, manifest = _read_manifest(backup)
-    if manifest.get("user_version") != LEGACY_SCHEMA:
-        raise ReleaseError("rollback_backup_must_be_schema3")
+    if manifest.get("user_version") != old_schema:
+        raise ReleaseError("rollback_backup_must_be_schema3" if old_schema==3 else "rollback_backup_must_be_schema4")
     for suffix in ("-wal", "-shm"):
         if Path(str(database) + suffix).exists():
             raise ReleaseError("database_sidecar_present")
     src = _connect_readonly(backup)
     current = _connect_readonly(database)
     try:
-        if _schema_version(src) != LEGACY_SCHEMA or _schema_version(current) != UPGRADED_SCHEMA:
+        if _schema_version(src) != old_schema or _schema_version(current) != new_schema:
             raise ReleaseError("rollback_schema_versions_mismatch")
         _integrity(src)
         _integrity(current)
         columns = manifest["table_columns"]
-        _assert_only_empty_pr20_columns(current, columns)
+        guard(current, columns)
         if _logical_digest(src, columns) != manifest.get("logical_sha256"):
             raise ReleaseError("backup_logical_fingerprint_mismatch")
-        # The only allowed post-backup difference is PR20's two nullable columns.
-        if _logical_digest(current, columns) != manifest.get("logical_sha256"):
+        # The guard verifies the exact migration-only additions, all still empty.
+        if _logical_digest(current, columns, extra_tables) != manifest.get("logical_sha256"):
             raise ReleaseError("rollback_refused_database_changed_since_backup")
         fd, temp_name = tempfile.mkstemp(prefix=f".{database.name}.restore-", suffix=".sqlite3", dir=database.parent)
         os.close(fd)
@@ -339,7 +339,7 @@ def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool)
                 src.backup(dst)
                 dst.commit()
                 _integrity(dst)
-                if _schema_version(dst) != LEGACY_SCHEMA or _logical_digest(dst, columns) != manifest["logical_sha256"]:
+                if _schema_version(dst) != old_schema or _logical_digest(dst, columns) != manifest["logical_sha256"]:
                     raise ReleaseError("rollback_staging_verification_failed")
             finally:
                 dst.close()
@@ -350,10 +350,31 @@ def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool)
         except BaseException:
             temp.unlink(missing_ok=True)
             raise
-        return {"restored_schema": LEGACY_SCHEMA, "integrity": "ok", "table_counts": manifest["table_counts"]}
+        return {"restored_schema": old_schema, "integrity": "ok", "table_counts": manifest["table_counts"]}
     finally:
         current.close()
         src.close()
+
+
+def restore_schema3_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
+    return _restore_backup(database,backup,services_stopped,3,4,_assert_only_empty_pr20_columns)
+
+
+def _assert_only_empty_v016_tables(db, schema4):
+    current=_tables(db)
+    extra={'client_conversations':['task_id'],
+           'proposal_revisions':['task_id','revision','base_revision','title','body','author','author_role','source_message','created_at']}
+    if current != {**schema4,**extra}:
+        raise ReleaseError('database_schema_changed_beyond_v016')
+    for table in extra:
+        if db.execute('SELECT 1 FROM '+table+' LIMIT 1').fetchone():
+            raise ReleaseError('rollback_refused_new_schema_data')
+
+
+def restore_schema4_backup(database: Path, backup: Path, services_stopped: bool) -> dict:
+    """Pre-traffic schema5->4 only; any saved message/receipt/edit/heartbeat refuses."""
+    return _restore_backup(database,backup,services_stopped,4,5,_assert_only_empty_v016_tables,
+                           ('client_conversations','proposal_revisions'))
 
 
 def assert_local_services_stopped() -> None:
@@ -450,7 +471,8 @@ def stage_release(repo: Path, revision: str, release_root: Path) -> tuple[Path, 
 
 
 def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
-                         auth_file: Path, database: Path, output_dir: Path) -> list[Path]:
+                         auth_file: Path, database: Path, output_dir: Path,
+                         crm_credential_file: Path | None = None, client_controls_file: Path | None = None) -> list[Path]:
     """Render and parse two plist fixtures; deliberately never loads them."""
     release_dir = release_dir.expanduser().absolute()
     app_root = _outside_checkout(app_root)
@@ -471,6 +493,9 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
         "server": ("backend.server", ["--port", "18083", "--auth-file", str(auth_file), "--board-db", str(database)]),
         "worker": ("backend.context_delivery", ["--board-db", str(database), "--serve", "--service", "--interval", "2", "--limit", "20"]),
     }
+    references={"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file}
+    for flag, reference in references.items():
+        if reference is not None:specs['server'][1].extend([flag,str(_private_file(reference.expanduser().absolute()))])
     paths = []
     for role, (module, args) in specs.items():
         label = f"{SERVICE_PREFIX}.{role}.{prefix}"
@@ -494,12 +519,13 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
             stream.flush()
             os.fsync(stream.fileno())
         paths.append(path)
-    validate_launch_agents(paths, release_dir, database, auth_file)
+    validate_launch_agents(paths, release_dir, database, auth_file,crm_credential_file,client_controls_file)
     _fsync_dir(output_dir)
     return paths
 
 
-def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path, auth_file: Path) -> dict:
+def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path, auth_file: Path,
+                          crm_credential_file: Path | None = None, client_controls_file: Path | None = None) -> dict:
     if len(paths) != 2:
         raise ReleaseError("exactly_two_launch_agents_required")
     records = []
@@ -529,8 +555,12 @@ def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path,
         if role == "server":
             if "--auth-file" not in args or args[args.index("--auth-file") + 1] != str(auth_file):
                 raise ReleaseError("launch_agent_auth_reference_mismatch")
-            if "--crm-credential-file" in args:
-                raise ReleaseError("release_profile_must_not_add_crm_credentials")
+            for flag,reference in {"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file}.items():
+                if reference is None:
+                    if flag in args:raise ReleaseError("release_profile_must_not_add_crm_credentials" if flag=="--crm-credential-file" else "release_profile_unexpected_client_controls")
+                elif (args.count(flag)!=1 or args.index(flag)+1>=len(args)
+                      or args[args.index(flag)+1]!=str(_private_file(reference.expanduser().absolute()))):
+                    raise ReleaseError("launch_agent_private_reference_mismatch")
         else:
             if not {"--serve", "--service"}.issubset(args):
                 raise ReleaseError("launch_agent_worker_mode_invalid")
@@ -567,6 +597,10 @@ def main(argv=None) -> int:
     restore.add_argument("--backup", type=Path, required=True)
     restore.add_argument("--assert-services-stopped", action="store_true", required=True,
                          help="operator confirms both LaunchAgents are unloaded and processes exited")
+    restore4 = sub.add_parser("restore-v4", help="restore unchanged schema-4 snapshot before any v016 traffic")
+    restore4.add_argument("--database", type=Path, required=True)
+    restore4.add_argument("--backup", type=Path, required=True)
+    restore4.add_argument("--assert-services-stopped", action="store_true", required=True)
     agents = sub.add_parser("render-agents", help="write and validate candidate plists without loading them")
     agents.add_argument("--release-dir", type=Path, required=True)
     agents.add_argument("--app-root", type=Path, required=True)
@@ -574,6 +608,8 @@ def main(argv=None) -> int:
     agents.add_argument("--auth-file", type=Path, required=True)
     agents.add_argument("--database", type=Path, required=True)
     agents.add_argument("--output-dir", type=Path, required=True)
+    agents.add_argument("--crm-credential-file", type=Path, help="Explicit existing private GET-only CRM reference; contents never read by renderer")
+    agents.add_argument("--client-controls-file", type=Path, help="Explicit private exact client/obligation bindings; contents never read by renderer")
     inspect = sub.add_parser("inspect", help="read schema, integrity and aggregate table counts")
     inspect.add_argument("--database", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -585,14 +621,15 @@ def main(argv=None) -> int:
             path, manifest, info = backup_database(args.database, args.backup_dir)
             result = {"backup": str(path), "manifest": str(manifest), "user_version": info["user_version"],
                       "integrity": "ok", "table_counts": info["table_counts"]}
-        elif args.command == "restore":
+        elif args.command in ("restore","restore-v4"):
             assert_local_services_stopped()
-            result = restore_schema3_backup(args.database, args.backup, args.assert_services_stopped)
+            restore_fn=restore_schema4_backup if args.command=="restore-v4" else restore_schema3_backup
+            result = restore_fn(args.database, args.backup, args.assert_services_stopped)
         elif args.command == "render-agents":
             paths = render_launch_agents(args.release_dir, args.app_root, args.python,
-                                         args.auth_file, args.database, args.output_dir)
+                                         args.auth_file, args.database, args.output_dir,args.crm_credential_file,args.client_controls_file)
             result = {"plists": [str(path) for path in paths],
-                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute())}
+                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute(),args.crm_credential_file,args.client_controls_file)}
         else:
             result = inspect_database(args.database)
     except (ReleaseError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:

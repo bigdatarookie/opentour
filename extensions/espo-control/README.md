@@ -115,8 +115,8 @@ run against the live CRM during source work.
 7. Independent integration verifies native denial with this capability alone,
    edit/readback/reload of title, forbidden records/entities/fields/roles, CAS,
    same-key concurrency and committed-response-loss reconciliation. Confirm no
-   unrelated business field/record/Stream/account changed. Keep PR23's separate
-   conversation/proposal integration and control binding; do not relabel these
+   unrelated business field/record/Stream/account changed. Keep accepted PR23's
+   conversation/proposal control binding; do not relabel these
    tests as its actual-agent outcome. No send, booking or payment follows.
 
 To revoke, the authorized operator disables/removes the upstream control binding

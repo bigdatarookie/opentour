@@ -54,6 +54,8 @@ class Principal:
     board_create: bool = False
     board_tasks: tuple = ()
     board_only: bool = False
+    conversation_clients: tuple = ()
+    proposal_edit: bool = False
 
 
 class Auth:
@@ -94,8 +96,14 @@ class Auth:
                     raise Failure('invalid_board_grant', 403)
                 if g.get('boardOnly') and (not board.get('tasks') or '*' in board['tasks']):
                     raise Failure('board_only_requires_exact_task_scope',403)
+                conversations=g.get('clientConversations',{})
+                if (not isinstance(conversations,dict) or set(conversations)-{'clients','editProposal'}
+                        or type(conversations.get('editProposal',False)) is not bool
+                        or not isinstance(conversations.get('clients',[]),list) or len(conversations.get('clients',[]))>1000
+                        or any(not isinstance(c,str) or not re.fullmatch(r'crm:(?:Contact|Account):[A-Za-z0-9_-]{1,128}',c) for c in conversations.get('clients',[]))):
+                    raise Failure('invalid_client_conversation_grant',403)
                 return Principal(g['subject'], g['role'], tuple(g['projects']), board.get('read', False),
-                                 board.get('respond', False), board.get('create', False), tuple(board.get('tasks', [])), g.get('boardOnly',False))
+                                 board.get('respond', False), board.get('create', False), tuple(board.get('tasks', [])), g.get('boardOnly',False), tuple(conversations.get('clients',[])),conversations.get('editProposal',False))
         raise Failure('authentication_required', 401)
 
 
