@@ -185,6 +185,68 @@ class LocalBoardReleaseTests(unittest.TestCase):
             worker=next(p for p in paths if '.worker.' in p.name)
             self.assertNotIn('--crm-control-credential-file',plistlib.loads(worker.read_bytes())['ProgramArguments'])
 
+    def test_native_work_root_render_and_installed_readback(self):
+        with tempfile.TemporaryDirectory(prefix='opentour-native-root-') as raw:
+            root = Path(raw).resolve()
+            release = root / 'abcdef1'
+            release.mkdir()
+            native = root / 'registered-work'
+            mission = native / 'missions' / '01-local-information-layer'
+            (mission / 'slices').mkdir(parents=True)
+            (native / 'project.yaml').write_text('synthetic declaration')
+            (mission / 'SPEC.md').write_text('synthetic mission')
+            auth, db = root / 'auth.json', root / 'state' / 'board.sqlite3'
+            baseline = render_launch_agents(release, root/'app', Path(sys.executable),
+                                            auth, db, root/'baseline')
+            paths = render_launch_agents(release, root/'app', Path(sys.executable),
+                                         auth, db, root/'rendered', work_root=native)
+            self.assertTrue(validate_launch_agents(paths, release, db, auth, work_root=native)['valid'])
+            before = {plistlib.loads(p.read_bytes())['Label']: plistlib.loads(p.read_bytes()) for p in baseline}
+            for path in paths:
+                record = plistlib.loads(path.read_bytes())
+                original = before[record['Label']]
+                if '.server.' in path.name:
+                    self.assertEqual(record['ProgramArguments'], original['ProgramArguments'] + ['--work-root', str(native)])
+                else:
+                    self.assertEqual(record, original)
+            installed = root / 'installed'
+            installed.mkdir(mode=0o700)
+            copies = []
+            for path in paths:
+                copy = installed / path.name
+                copy.write_bytes(path.read_bytes());copy.chmod(0o600);copies.append(copy)
+            self.assertTrue(validate_launch_agents(copies, release, db, auth, work_root=native)['valid'])
+            with self.assertRaisesRegex(ReleaseError, 'unexpected_work_root'):
+                validate_launch_agents(copies, release, db, auth)
+            with self.assertRaisesRegex(ReleaseError, 'work_root_mismatch'):
+                validate_launch_agents(baseline, release, db, auth, work_root=native)
+            server = next(p for p in copies if '.server.' in p.name)
+            original = plistlib.loads(server.read_bytes())
+            for tail in ([str(release)], [], [str(native), '--work-root', str(native)]):
+                altered = dict(original)
+                args = original['ProgramArguments']
+                altered['ProgramArguments'] = args[:args.index('--work-root')+1] + tail
+                server.write_bytes(plistlib.dumps(altered))
+                with self.assertRaisesRegex(ReleaseError, 'work_root_mismatch'):
+                    validate_launch_agents(copies, release, db, auth, work_root=native)
+            altered = dict(original)
+            args = original['ProgramArguments']
+            altered['ProgramArguments'] = args[:args.index('--work-root')] + ['--work-root=' + str(native)]
+            server.write_bytes(plistlib.dumps(altered))
+            with self.assertRaisesRegex(ReleaseError, 'work_root_mismatch'):
+                validate_launch_agents(copies, release, db, auth, work_root=native)
+            server.write_bytes(plistlib.dumps(original))
+            worker = next(p for p in copies if '.worker.' in p.name)
+            record = plistlib.loads(worker.read_bytes())
+            record['ProgramArguments'] += ['--work-root', str(native)]
+            worker.write_bytes(plistlib.dumps(record))
+            with self.assertRaisesRegex(ReleaseError, 'worker_work_root'):
+                validate_launch_agents(copies, release, db, auth, work_root=native)
+            for invalid in (Path('relative-root'), release):
+                with self.assertRaisesRegex(ReleaseError, 'native_work_root_invalid'):
+                    render_launch_agents(release, root/'app', Path(sys.executable), auth, db,
+                                         root/('invalid-' + invalid.name), work_root=invalid)
+
     def test_stage_extracts_exact_commit_without_checkout_metadata(self):
         with tempfile.TemporaryDirectory(prefix="opentour-stage-source-") as raw:
             root = Path(raw)

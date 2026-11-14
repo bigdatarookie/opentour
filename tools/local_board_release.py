@@ -470,10 +470,23 @@ def stage_release(repo: Path, revision: str, release_root: Path) -> tuple[Path, 
     return destination, {"commit": commit, "tree": tree, "archive_stderr_bytes": len(stderr)}
 
 
+def _native_work_root(path: Path) -> Path:
+    """Check the declared source contour by stat only; never load work/private data."""
+    path = path.expanduser()
+    if not path.is_absolute():
+        raise ReleaseError("native_work_root_invalid")
+    path = path.resolve()
+    mission = path / "missions" / "01-local-information-layer"
+    if (not path.is_dir() or not (path / "project.yaml").is_file()
+            or not (mission / "SPEC.md").is_file() or not (mission / "slices").is_dir()):
+        raise ReleaseError("native_work_root_invalid")
+    return path
+
+
 def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
                          auth_file: Path, database: Path, output_dir: Path,
                          crm_credential_file: Path | None = None, client_controls_file: Path | None = None,
-                         crm_control_credential_file: Path | None = None) -> list[Path]:
+                         crm_control_credential_file: Path | None = None, work_root: Path | None = None) -> list[Path]:
     """Render and parse two plist fixtures; deliberately never loads them."""
     release_dir = release_dir.expanduser().absolute()
     app_root = _outside_checkout(app_root)
@@ -494,6 +507,8 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
         "server": ("backend.server", ["--port", "18083", "--auth-file", str(auth_file), "--board-db", str(database)]),
         "worker": ("backend.context_delivery", ["--board-db", str(database), "--serve", "--service", "--interval", "2", "--limit", "20"]),
     }
+    if work_root is not None:
+        specs["server"][1].extend(["--work-root", str(_native_work_root(work_root))])
     references={"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file,"--crm-control-credential-file":crm_control_credential_file}
     for flag, reference in references.items():
         if reference is not None:specs['server'][1].extend([flag,str(_private_file(reference.expanduser().absolute()))])
@@ -520,16 +535,17 @@ def render_launch_agents(release_dir: Path, app_root: Path, python: Path,
             stream.flush()
             os.fsync(stream.fileno())
         paths.append(path)
-    validate_launch_agents(paths, release_dir, database, auth_file,crm_credential_file,client_controls_file,crm_control_credential_file)
+    validate_launch_agents(paths, release_dir, database, auth_file,crm_credential_file,client_controls_file,crm_control_credential_file,work_root)
     _fsync_dir(output_dir)
     return paths
 
 
 def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path, auth_file: Path,
                           crm_credential_file: Path | None = None, client_controls_file: Path | None = None,
-                         crm_control_credential_file: Path | None = None) -> dict:
+                         crm_control_credential_file: Path | None = None, work_root: Path | None = None) -> dict:
     if len(paths) != 2:
         raise ReleaseError("exactly_two_launch_agents_required")
+    expected_work_root = str(_native_work_root(work_root)) if work_root is not None else None
     records = []
     for path in paths:
         _private_file(path)
@@ -554,7 +570,15 @@ def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path,
             raise ReleaseError("launch_agent_lifecycle_policy_invalid")
         if "--board-db" not in args or args[args.index("--board-db") + 1] != str(database):
             raise ReleaseError("launch_agent_database_mismatch")
+        root_flags = [arg for arg in args if isinstance(arg, str)
+                      and (arg == "--work-root" or arg.startswith("--work-root="))]
         if role == "server":
+            if expected_work_root is None:
+                if root_flags:
+                    raise ReleaseError("launch_agent_unexpected_work_root")
+            elif (root_flags != ["--work-root"] or args.index("--work-root") + 1 >= len(args)
+                  or args[args.index("--work-root") + 1] != expected_work_root):
+                raise ReleaseError("launch_agent_work_root_mismatch")
             if "--auth-file" not in args or args[args.index("--auth-file") + 1] != str(auth_file):
                 raise ReleaseError("launch_agent_auth_reference_mismatch")
             for flag,reference in {"--crm-credential-file":crm_credential_file,"--client-controls-file":client_controls_file,"--crm-control-credential-file":crm_control_credential_file}.items():
@@ -564,6 +588,8 @@ def validate_launch_agents(paths: list[Path], release_dir: Path, database: Path,
                       or args[args.index(flag)+1]!=str(_private_file(reference.expanduser().absolute()))):
                     raise ReleaseError("launch_agent_private_reference_mismatch")
         else:
+            if root_flags:
+                raise ReleaseError("launch_agent_worker_work_root_forbidden")
             if not {"--serve", "--service"}.issubset(args):
                 raise ReleaseError("launch_agent_worker_mode_invalid")
             if any(name in " ".join(args) for name in ("OPENRIG_SESSION_NAME", "OPENRIG_NODE_ID")):
@@ -610,6 +636,7 @@ def main(argv=None) -> int:
     agents.add_argument("--auth-file", type=Path, required=True)
     agents.add_argument("--database", type=Path, required=True)
     agents.add_argument("--output-dir", type=Path, required=True)
+    agents.add_argument("--work-root", type=Path, help="Explicit absolute registered native mission source root, server-only; stat checked, contents never read")
     agents.add_argument("--crm-credential-file", type=Path, help="Explicit existing private GET-only CRM reference; contents never read by renderer")
     agents.add_argument("--client-controls-file", type=Path, help="Explicit private exact client/obligation bindings; contents never read by renderer")
     agents.add_argument("--crm-control-credential-file", type=Path, help="Separate exact Contact.title capability reference; never the GET API key/admin credential")
@@ -630,9 +657,9 @@ def main(argv=None) -> int:
             result = restore_fn(args.database, args.backup, args.assert_services_stopped)
         elif args.command == "render-agents":
             paths = render_launch_agents(args.release_dir, args.app_root, args.python,
-                                         args.auth_file, args.database, args.output_dir,args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file)
+                                         args.auth_file, args.database, args.output_dir,args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file,args.work_root)
             result = {"plists": [str(path) for path in paths],
-                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute(),args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file)}
+                      **validate_launch_agents(paths, args.release_dir.absolute(), args.database.absolute(), args.auth_file.absolute(),args.crm_credential_file,args.client_controls_file,args.crm_control_credential_file,args.work_root)}
         else:
             result = inspect_database(args.database)
     except (ReleaseError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:
